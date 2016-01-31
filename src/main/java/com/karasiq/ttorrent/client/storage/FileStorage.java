@@ -19,8 +19,6 @@ import akka.actor.ActorRef;
 import akka.util.ByteString;
 import com.karasiq.torrentstream.TorrentChunk;
 import com.karasiq.torrentstream.TorrentFileStart;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -41,9 +39,6 @@ import java.nio.channels.FileChannel;
  * @author mpetazzoni
  */
 public class FileStorage implements TorrentByteStorage {
-
-    private static final Logger logger =
-		LoggerFactory.getLogger(FileStorage.class);
     public static final int DISK_CACHE_MAX = 50 * 1024 * 1024; // 50 MB
 
     private final File target;
@@ -136,56 +131,30 @@ public class FileStorage implements TorrentByteStorage {
 
 	@SuppressWarnings("ResultOfMethodCallIgnored")
 	@Override
-	public synchronized void close() throws IOException {
-		//logger.debug("Closing file channel to " + this.current.getName() + "...");
+	public void close() throws IOException {
 		if (this.channel != null) {
-			if (this.channel.isOpen()) {
-				this.channel.force(true);
-			}
-			this.raf.close();
-			if (this.target.exists()) {
-				this.target.delete();
-			}
-			this.channel = null;
+			synchronized (this) {
+                if (this.channel != null) {
+                    if (this.channel.isOpen()) {
+                        this.channel.force(true);
+                    }
+                    this.raf.close();
+                    if (this.target.exists()) {
+                        this.target.delete();
+                    }
+                    this.channel = null;
+                }
+            }
 		}
 	}
 
-	/** Move the partial file to its final location.
-	 */
 	@Override
-	public synchronized void finish() throws IOException {
-//		logger.debug("Closing file channel to " + this.current.getName() +
-//			" (download complete).");
-//		if (this.channel.isOpen()) {
-//			this.channel.force(true);
-//		}
-
-		// Nothing more to do if we're already on the target file.
-//		if (this.isFinished()) {
-//			return;
-//		}
-
-//		this.raf.close();
-//		FileUtils.deleteQuietly(this.target);
-//		FileUtils.moveFile(this.current, this.target);
-//
-//		logger.debug("Re-opening torrent byte storage at {}.",
-//				this.target.getAbsolutePath());
-//
-//		this.raf = new RandomAccessFile(this.target, "rw");
-//		this.raf.setLength(this.size);
-//		this.channel = this.raf.getChannel();
-//		this.current = this.target;
-//
-//		FileUtils.deleteQuietly(this.partial);
-//		logger.info("Moved torrent data from {} to {}.",
-//			this.partial.getName(),
-//			this.target.getName());
+	public void finish() throws IOException {
+        // Nothing now
 	}
 
 	@Override
 	public boolean isFinished() {
 		return false;
-//		return this.current.equals(this.target);
 	}
 }

@@ -41,11 +41,13 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
     this(completeAfterFirstFile = true)
   }
 
-  val maxBufferSize = 200
+  private val config = context.system.settings.config.getConfig("torrentstream.streamer")
 
-  var buffer = Vector.empty[TorrentChunk]
+  private val maxBufferSize = config.getInt("max-buffer-size")
 
-  val minRate = 2.5 // In kilobytes per second
+  private var buffer = Vector.empty[TorrentChunk]
+
+  private val minRate = config.getDouble("min-rate") // In kilobytes per second
 
   private def autoDownloadRate(): Double = {
     if (buffer.isEmpty && totalDemand > 0) {
@@ -109,7 +111,7 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
       stay()
 
     case Event(Cancel, _) ⇒
-      log.warning("Torrent streaming stopped")
+      log.debug("Torrent streaming stopped")
       stop()
   }
 
@@ -124,7 +126,7 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
       stay()
 
     case Event(InterruptTorrentDownload | StateTimeout, ctx: TorrentWriterContext) ⇒
-      log.warning("Torrent downloading interrupted")
+      log.debug("Torrent downloading interrupted")
       ctx.close()
       buffer = Vector.empty
       sender() ! TorrentStopped
@@ -132,7 +134,7 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
       goto(Idle) using NoData
 
     case Event(Cancel, ctx: TorrentWriterContext) ⇒
-      log.warning("Torrent streaming stopped")
+      log.debug("Torrent streaming stopped")
       ctx.close()
       stop()
   }
@@ -140,9 +142,9 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
   when(Loading, stateTimeout = 30 minutes) {
     case Event(chunk @ TorrentChunk(file, offset, data), ctx @ TorrentFileInfo(torrent, client, fileName, fileSize, fileOffset)) if file == fileName ⇒
       if (offset <= fileOffset) {
-        log.info("Max download rate set to {} kb/sec", this.autoDownloadRate())
+        log.debug("Max download rate set to {} kb/sec", this.autoDownloadRate())
         client.setMaxDownloadRate(this.autoDownloadRate())
-        log.info("Chunk: {} at {} with size {} of total {}", file, offset, data.length, fileSize)
+        log.debug("Chunk: {} at {} with size {} of total {}", file, offset, data.length, fileSize)
         deliver(chunk.copy(data = data.drop((fileOffset - offset).toInt)))
         val newOffset = offset + data.length
         if (newOffset == fileSize) {
@@ -160,7 +162,7 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
           stay() using TorrentFileInfo(torrent, client, fileName, fileSize, newOffset)
         }
       } else {
-        log.warning("Chunk stashed: {}", offset)
+        log.debug("Chunk stashed: {}", offset)
         stash()
         stay()
       }
@@ -170,7 +172,7 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
       stay()
 
     case Event(InterruptTorrentDownload | StateTimeout, ctx: TorrentWriterContext) ⇒
-      log.warning("Torrent downloading interrupted")
+      log.debug("Torrent downloading interrupted")
       ctx.close()
       buffer = Vector.empty
       sender() ! TorrentStopped
@@ -178,7 +180,7 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
       goto(Idle) using NoData
 
     case Event(Cancel, ctx: TorrentWriterContext) ⇒
-      log.warning("Torrent streaming stopped")
+      log.debug("Torrent streaming stopped")
       ctx.close()
       stop()
 
