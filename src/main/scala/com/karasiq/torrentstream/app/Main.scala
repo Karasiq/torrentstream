@@ -5,6 +5,7 @@ import java.io.File
 import akka.actor.{ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
+import akka.http.scaladsl.model.headers.Range
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server._
 import akka.stream.ActorMaterializer
@@ -35,19 +36,28 @@ object Main extends App {
     }
   }))
 
-  def createTorrentStream: Directive[(Long, Source[ByteString, Unit])] = {
+  def offsetValue: Directive1[Long] = {
+    optionalHeaderValueByType[Range]().map {
+      case Some(range) ⇒
+        range.ranges.head.getOffset().getOrElse(0).asInstanceOf[Long]
+      case None ⇒
+        0L
+    }
+  }
+
+  def createTorrentStream(offset: Long): Directive[(Long, Source[ByteString, Unit])] = {
     val writer = actorSystem.actorOf(Props[TorrentWriter])
     val torrent = Torrent.load(new File(sys.props("test.torrent.path")))
     val file = torrent.getFiles.head
-    writer ! DownloadTorrent(ByteString(torrent.getEncoded), file.file.getPath)
+    writer ! DownloadTorrent(ByteString(torrent.getEncoded), file.file.getPath, offset)
     tprovide(file.size → Source.fromPublisher(ActorPublisher[TorrentChunk](writer)).map(_.data))
   }
 
 
   val route = get {
-    (pathSingleSlash & createTorrentStream) { (size, stream) ⇒
-      complete {
-        HttpEntity(ContentTypes.NoContentType, size, stream)
+    (pathSingleSlash & offsetValue) { offset ⇒
+      createTorrentStream(offset) { (size, stream) ⇒
+        complete(if (offset == 0) StatusCodes.OK else StatusCodes.PartialContent, HttpEntity(ContentTypes.NoContentType, size - offset, stream))
       }
     }
   }

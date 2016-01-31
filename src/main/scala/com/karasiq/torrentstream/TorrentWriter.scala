@@ -33,7 +33,6 @@ sealed trait TorrentWriterContext extends Closeable {
 }
 object TorrentWriterData {
   case object NoData extends TorrentWriterData
-  case class TorrentInfo(torrent: SharedTorrent, client: Client, file: String) extends TorrentWriterData with TorrentWriterContext
   case class TorrentFileInfo(torrent: SharedTorrent, client: Client, file: String, fileSize: Long, currentOffset: Long) extends TorrentWriterData with TorrentWriterContext
 }
 
@@ -46,10 +45,14 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
 
   var buffer = Vector.empty[TorrentChunk]
 
-  val minRate = 2.5
+  val minRate = 2.5 // In kilobytes per second
 
   private def autoDownloadRate(): Double = {
-    minRate * (maxBufferSize - buffer.length)
+    if (buffer.isEmpty && totalDemand > 0) {
+      0 // Unlimited
+    } else {
+      minRate * (maxBufferSize - buffer.length)
+    }
   }
 
   @tailrec
@@ -85,16 +88,16 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
   startWith(Idle, NoData)
 
   when(Idle) {
-    case Event(DownloadTorrent(data, file), _) ⇒
-      log.info("Starting torrent download: {}", file)
+    case Event(DownloadTorrent(data, file, startOffset), _) ⇒
+      log.info("Starting torrent download: {} from position {}", file, startOffset)
       val torrent = new SharedTorrent(self, data.toArray, new File(sys.props("java.io.tmpdir")), false)
-      torrent.setWantedFile(file)
+      torrent.setWantedFile(file, startOffset)
       val client = new Client(InetAddress.getLocalHost, torrent)
       client.setMaxDownloadRate(autoDownloadRate())
       client.download()
       unstashAll()
       sender() ! TorrentStarted
-      goto(AwaitingMetadata) using TorrentInfo(torrent, client, file)
+      goto(AwaitingMetadata) using TorrentFileInfo(torrent, client, file, 0, startOffset)
 
     case Event(Request(_), _) ⇒
       stash()
@@ -111,10 +114,10 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
   }
 
   when(AwaitingMetadata, stateTimeout = 5 minutes) {
-    case Event(TorrentFileStart(file, size), TorrentInfo(torrent, client, fileName)) if file == fileName ⇒
+    case Event(TorrentFileStart(file, size), TorrentFileInfo(torrent, client, fileName, _, startOffset)) if file == fileName ⇒
       log.info("Torrent downloading started: {} ({} bytes)", file, size)
       unstashAll()
-      goto(Loading) using TorrentFileInfo(torrent, client, file, size, 0)
+      goto(Loading) using TorrentFileInfo(torrent, client, file, size, startOffset)
 
     case Event(_: DownloadTorrent | Request(_), _) ⇒
       stash()
@@ -136,12 +139,12 @@ class TorrentWriter(completeAfterFirstFile: Boolean) extends FSM[TorrentWriterSt
 
   when(Loading, stateTimeout = 30 minutes) {
     case Event(chunk @ TorrentChunk(file, offset, data), ctx @ TorrentFileInfo(torrent, client, fileName, fileSize, fileOffset)) if file == fileName ⇒
-      if (offset == fileOffset) {
+      if (offset <= fileOffset) {
         log.info("Max download rate set to {} kb/sec", this.autoDownloadRate())
         client.setMaxDownloadRate(this.autoDownloadRate())
         log.info("Chunk: {} at {} with size {} of total {}", file, offset, data.length, fileSize)
-        deliver(chunk)
-        val newOffset = fileOffset + data.length
+        deliver(chunk.copy(data = data.drop((fileOffset - offset).toInt)))
+        val newOffset = offset + data.length
         if (newOffset == fileSize) {
           log.info("End of file: {}", file)
           ctx.close()

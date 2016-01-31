@@ -42,10 +42,11 @@ import java.nio.channels.FileChannel;
  */
 public class FileStorage implements TorrentByteStorage {
 
-	private static final Logger logger =
+    private static final Logger logger =
 		LoggerFactory.getLogger(FileStorage.class);
+    public static final int DISK_CACHE_MAX = 50 * 1024 * 1024; // 50 MB
 
-	private final File target;
+    private final File target;
 	private final String file;
 	private final long offset;
 	private final long size;
@@ -67,8 +68,8 @@ public class FileStorage implements TorrentByteStorage {
 		if (this.channel == null) {
 			writer.tell(TorrentFileStart.apply(this.file, size), ActorRef.noSender());
 			raf = new RandomAccessFile(this.target, "rw");
-			if (size > 524288000) {
-				raf.setLength(524288000);
+			if (size > DISK_CACHE_MAX) {
+				raf.setLength(DISK_CACHE_MAX);
 			} else {
 				raf.setLength(size);
 			}
@@ -87,8 +88,8 @@ public class FileStorage implements TorrentByteStorage {
 
 
 	private long getFileOffset(long offset, long size) {
-		while (offset + size >= 524288000) {
-			offset -= 524288000;
+		while (offset + size >= DISK_CACHE_MAX) {
+			offset -= DISK_CACHE_MAX;
 			if (offset < 0) {
 				return 0;
 			}

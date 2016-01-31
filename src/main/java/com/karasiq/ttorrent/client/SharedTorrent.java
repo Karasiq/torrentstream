@@ -92,7 +92,7 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 	private int wantedPieceIndex = 0;
 	private int wantedPieceLast = 0;
 
-	public void setWantedFile(String fileName) {
+	public void setWantedFile(String fileName, long fileOffset) {
 		TorrentFile selectedFile = null;
 		long offset = 0L;
 		for (TorrentFile file : this.files) {
@@ -110,6 +110,7 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 			this.wantedPieceIndex = 0;
 			this.wantedPieceLast = pieces.length;
 		}
+        wantedPieceIndex += fileOffset / pieceLength;
 		assert wantedPieceIndex <= wantedPieceLast;
 		logger.info("File set to {}: from {} to {}.",
 			new Object[] {
@@ -357,7 +358,7 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 			for (Future<Piece> task : results) {
 				Piece piece = task.get();
 				if (this.pieces[piece.getIndex()].isValid()) {
-					this.completedPieces.set(piece.getIndex());
+//					this.completedPieces.set(piece.getIndex());
 					this.left -= piece.size();
 				}
 			}
@@ -522,7 +523,7 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 		// A completed piece means that's that much data left to download for
 		// this torrent.
 		this.left -= piece.size();
-		this.completedPieces.set(piece.getIndex());
+//		this.completedPieces.set(piece.getIndex());
 	}
 
 	/** PeerActivityListener handler(s). *************************************/
@@ -716,7 +717,7 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 												  Piece piece) throws IOException {
 		// Regardless of validity, record the number of bytes downloaded and
 		// mark the piece as not requested anymore
-		this.downloaded += piece.size();
+//		this.downloaded += piece.size();
 		this.requestedPieces.set(piece.getIndex(), false);
         if (wantedPieceIndex == piece.getIndex()) {
             wantedPieceIndex++;

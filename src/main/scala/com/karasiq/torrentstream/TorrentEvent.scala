@@ -10,7 +10,7 @@ case class TorrentChunk(file: String, offset: Long, data: ByteString) extends To
 
 sealed trait TorrentCommand
 
-case class DownloadTorrent(torrent: ByteString, file: String) extends TorrentCommand
+case class DownloadTorrent(torrent: ByteString, file: String, offset: Long) extends TorrentCommand
 
 case object InterruptTorrentDownload extends TorrentCommand
 
