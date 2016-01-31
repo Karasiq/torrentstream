@@ -1,40 +1,77 @@
 package com.karasiq.torrentstream
 
-import java.io.{RandomAccessFile, FileInputStream, FileOutputStream}
-import java.nio.file.{Paths, Files}
+import java.io.File
+import java.net.InetAddress
 
-import akka.actor.Actor.Receive
-import akka.actor.{Stash, ActorLogging, Actor}
+import akka.actor.{FSM, Stash}
+import com.karasiq.torrentstream.TorrentWriterData.{NoData, TorrentFileInfo, TorrentInfo}
+import com.karasiq.torrentstream.TorrentWriterState._
+import com.karasiq.ttorrent.client.{Client, SharedTorrent}
 
 import scala.concurrent.duration._
-import scala.collection.JavaConversions._
+import scala.language.postfixOps
 
-class TorrentWriter extends Actor with ActorLogging with Stash {
-  var fileSize = 0L
+sealed trait TorrentWriterState
+object TorrentWriterState {
+  case object Idle extends TorrentWriterState
+  case object AwaitingMetadata extends TorrentWriterState
+  case object Loading extends TorrentWriterState
+}
 
-  var currentOffset = 0L
+sealed trait TorrentWriterData
+object TorrentWriterData {
+  case object NoData extends TorrentWriterData
+  case class TorrentInfo(torrent: SharedTorrent, client: Client, file: String) extends TorrentWriterData
+  case class TorrentFileInfo(torrent: SharedTorrent, client: Client, file: String, fileSize: Long, currentOffset: Long) extends TorrentWriterData
+}
 
-  override def receive: Receive = {
-    case TorrentFileStart(file, size) ⇒
-      log.info("Start of file: {} ({} bytes)", file, size)
-      fileSize = size
+class TorrentWriter extends FSM[TorrentWriterState, TorrentWriterData] with Stash {
+  startWith(Idle, NoData)
 
-    case TorrentChunk(file, offset, data) ⇒
-      if (offset == currentOffset) {
-        log.info("Chunk: {} at {} with size {}", file, offset, data.length)
-        currentOffset += data.length
-        unstashAll()
+  when(Idle) {
+    case Event(DownloadTorrent(data, file), _) ⇒
+      log.info("Starting torrent download: {}", file)
+      val torrent = new SharedTorrent(self, data.toArray, new File(sys.props("java.io.tmpdir")), false)
+      torrent.setWantedFile(file)
+      val client = new Client(InetAddress.getLocalHost, torrent)
+      client.download()
+      goto(AwaitingMetadata) using TorrentInfo(torrent, client, file)
+  }
+
+  when(AwaitingMetadata, stateTimeout = 5 minutes) {
+    case Event(TorrentFileStart(file, size), TorrentInfo(torrent, client, fileName)) if file == fileName ⇒
+      log.info("Torrent downloading started: {} ({} bytes)", file, size)
+      goto(Loading) using TorrentFileInfo(torrent, client, file, size, 0)
+
+    case Event(StateTimeout, TorrentInfo(torrent, client, fileName)) ⇒
+      client.stop(true)
+      torrent.close()
+      goto(Idle) using NoData
+  }
+
+  when(Loading, stateTimeout = 5 minutes) {
+    case Event(TorrentChunk(file, offset, data), TorrentFileInfo(torrent, client, fileName, fileSize, fileOffset)) if file == fileName ⇒
+      if (offset == fileOffset) {
+        log.info("Chunk: {} at {} with size {} of total {}", file, offset, data.length, fileSize)
+        val newOffset = fileOffset + data.length
+        if (newOffset == fileSize) {
+          log.info("End of file: {}", file)
+          client.stop(true)
+          torrent.close()
+          goto(Idle) using NoData
+        } else {
+          unstashAll()
+          stay() using TorrentFileInfo(torrent, client, fileName, fileSize, newOffset)
+        }
       } else {
+        log.info("Skipping: {}", offset)
         stash()
+        stay()
       }
 
-    case TorrentFileEnd(file) ⇒
-      if (currentOffset == fileSize) {
-        log.info("End of file: {}", file)
-        Files.deleteIfExists(Paths.get(file))
-        context.stop(self)
-      } else {
-        stash()
-      }
+    case Event(StateTimeout, TorrentFileInfo(torrent, client, fileName, fileSize, fileOffset)) ⇒
+      client.stop(true)
+      torrent.close()
+      goto(Idle) using NoData
   }
 }

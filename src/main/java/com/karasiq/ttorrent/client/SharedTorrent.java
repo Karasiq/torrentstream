@@ -18,28 +18,19 @@ package com.karasiq.ttorrent.client;
 import akka.actor.ActorRef;
 import com.karasiq.ttorrent.bcodec.InvalidBEncodingException;
 import com.karasiq.ttorrent.client.storage.FileStorage;
+import org.apache.commons.io.FileUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Random;
-import java.util.SortedSet;
-import java.util.TreeSet;
+import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-
-import org.apache.commons.io.FileUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 /**
@@ -98,6 +89,37 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 	private double maxUploadRate = 0.0;
 	private double maxDownloadRate = 0.0;
 
+	private int wantedPieceIndex = 0;
+	private int wantedPieceLast = 0;
+
+	public void setWantedFile(String fileName) {
+		TorrentFile selectedFile = null;
+		long offset = 0L;
+		for (TorrentFile file : this.files) {
+			if (file.file.getPath().equals(fileName)) {
+				selectedFile = file;
+				break;
+			}
+			offset += file.size;
+		}
+
+		if (selectedFile != null) {
+			this.wantedPieceIndex = (int)(offset / pieceLength);
+			this.wantedPieceLast = (int)((offset + selectedFile.size) / pieceLength);
+		} else {
+			this.wantedPieceIndex = 0;
+			this.wantedPieceLast = pieces.length;
+		}
+		assert wantedPieceIndex <= wantedPieceLast;
+		logger.info("File set to {}: from {} to {}.",
+			new Object[] {
+				fileName,
+				wantedPieceIndex,
+				wantedPieceLast
+			}
+		);
+	}
+
 	public SharedTorrent(ActorRef writer, byte[] torrent, File parent, boolean seeder)
 		throws FileNotFoundException, IOException {
 		super(torrent, seeder);
@@ -126,15 +148,15 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 		List<FileStorage> files = new LinkedList<FileStorage>();
 		long offset = 0L;
 		for (TorrentFile file : this.files) {
-			File actual = new File(parent, file.file.getPath());
+			/* File actual = new File(parent, file.file.getPath());
 
 			if (!actual.getCanonicalPath().startsWith(parentPath)) {
 				throw new SecurityException("Torrent file path attempted " +
 					"to break directory jail!");
 			}
 
-			actual.getParentFile().mkdirs();
-			files.add(new FileStorage(actual, offset, file.size, writer));
+			actual.getParentFile().mkdirs(); */
+			files.add(new FileStorage(file.file.getPath(), offset, file.size, writer));
 			offset += file.size;
 		}
 		this.bucket = new com.karasiq.ttorrent.client.storage.FileCollectionStorage(files, this.getSize());
@@ -533,8 +555,6 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 		});
 	}
 
-    private int nextPiece = 0;
-
 	/**
 	 * Peer ready handler.
 	 *
@@ -554,38 +574,23 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 		logger.trace("Peer {} is ready and has {} interesting piece(s).",
 			peer, interesting.cardinality());
 
-		// If we didn't find interesting pieces, we need to check if we're in
-		// an end-game situation. If yes, we request an already requested piece
-		// to try to speed up the end.
-		if (interesting.cardinality() == 0) {
-			interesting = peer.getAvailablePieces();
-			if (!interesting.get(nextPiece)) {
-				logger.trace("No interesting piece from {}!", peer);
-				return;
-			}
-
-			if (this.completedPieces.cardinality() <
-					ENG_GAME_COMPLETION_RATIO * this.pieces.length) {
-				logger.trace("Not far along enough to warrant end-game mode.");
-				//return;
-			}
-
-			logger.trace("Possible end-game, we're about to request a piece " +
-				"that was already requested from another peer.");
+		if (!interesting.get(wantedPieceIndex) || wantedPieceIndex > wantedPieceLast) {
+			logger.trace("No interesting piece from {}", peer);
+            return;
 		}
 
-		this.requestedPieces.set(nextPiece, true);
+		this.requestedPieces.set(wantedPieceIndex, true);
 
 		logger.trace("Requesting {} from {}, we now have {} " +
 				"outstanding request(s): {}",
 			new Object[] {
-                nextPiece,
+				wantedPieceIndex,
 				peer,
 				this.requestedPieces.cardinality(),
 				this.requestedPieces
 			});
 
-		peer.downloadPiece(pieces[nextPiece]);
+		peer.downloadPiece(pieces[wantedPieceIndex]);
 	}
 
 	/**
@@ -713,8 +718,8 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 		// mark the piece as not requested anymore
 		this.downloaded += piece.size();
 		this.requestedPieces.set(piece.getIndex(), false);
-        if (nextPiece == piece.getIndex()) {
-            nextPiece++;
+        if (wantedPieceIndex == piece.getIndex()) {
+            wantedPieceIndex++;
         }
 
 		logger.trace("We now have {} piece(s) and {} outstanding request(s): {}",

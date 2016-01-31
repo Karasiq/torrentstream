@@ -15,21 +15,18 @@
  */
 package com.karasiq.ttorrent.client.storage;
 
+import akka.actor.ActorRef;
+import akka.util.ByteString;
+import com.karasiq.torrentstream.TorrentChunk;
+import com.karasiq.torrentstream.TorrentFileStart;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.Files;
-
-import akka.actor.ActorRef;
-import akka.util.ByteString;
-import com.karasiq.torrentstream.TorrentChunk;
-import com.karasiq.torrentstream.TorrentFileEnd;
-import com.karasiq.torrentstream.TorrentFileStart;
-import org.apache.commons.io.FileUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 /**
@@ -49,7 +46,7 @@ public class FileStorage implements TorrentByteStorage {
 		LoggerFactory.getLogger(FileStorage.class);
 
 	private final File target;
-//	private final File partial;
+	private final String file;
 	private final long offset;
 	private final long size;
 
@@ -57,17 +54,26 @@ public class FileStorage implements TorrentByteStorage {
 	private FileChannel channel;
 	private final ActorRef writer;
 
-	public FileStorage(File file, long offset, long size, ActorRef writer)
+	public FileStorage(String file, long offset, long size, ActorRef writer)
 		throws IOException {
 		this.writer = writer;
-		this.target = file;
+		this.target = File.createTempFile("torrentstream", String.valueOf(file.hashCode()));
+		this.file = file;
 		this.offset = offset;
 		this.size = size;
+	}
 
-		writer.tell(TorrentFileStart.apply(file.toString(), size), ActorRef.noSender());
-		raf = new RandomAccessFile(File.createTempFile("torrentstream", file.getName()), "rw");
-		raf.setLength(size);
-		channel = raf.getChannel();
+	private void initFile() throws IOException {
+		if (this.channel == null) {
+			writer.tell(TorrentFileStart.apply(this.file, size), ActorRef.noSender());
+			raf = new RandomAccessFile(this.target, "rw");
+			if (size > 524288000) {
+				raf.setLength(524288000);
+			} else {
+				raf.setLength(size);
+			}
+			channel = raf.getChannel();
+		}
 	}
 
 	protected long offset() {
@@ -92,25 +98,32 @@ public class FileStorage implements TorrentByteStorage {
 
 	@Override
 	public int read(ByteBuffer buffer, long offset) throws IOException {
-		final int requested = buffer.remaining();
-		final long fileOffset = getFileOffset(offset, requested);
+		if (this.channel != null) {
+			final int requested = buffer.remaining();
+			final long fileOffset = getFileOffset(offset, requested);
 
-		if (offset + requested > this.size) {
-			throw new IllegalArgumentException("Invalid storage read request!");
+			if (offset + requested > this.size) {
+				throw new IllegalArgumentException("Invalid storage read request!");
+			}
+
+			int bytes = this.channel.read(buffer, fileOffset);
+			if (bytes < requested) {
+				throw new IOException("Storage underrun!");
+			}
+
+			return bytes;
+		} else {
+			final int size = buffer.remaining();
+			buffer.position(buffer.position() + size);
+			return size;
 		}
-
-		int bytes = this.channel.read(buffer, fileOffset);
-		if (bytes < requested) {
-			throw new IOException("Storage underrun!");
-		}
-
-		return bytes;
 	}
 
 	@Override
 	public int write(ByteBuffer buffer, long offset) throws IOException {
+		this.initFile();
 		final ByteString data = ByteString.fromByteBuffer(buffer);
-		writer.tell(TorrentChunk.apply(target.toString(), offset, data), ActorRef.noSender());
+		writer.tell(TorrentChunk.apply(this.file, offset, data), ActorRef.noSender());
 
 		final int requested = data.length();
 		final long fileOffset = getFileOffset(offset, requested);
@@ -120,14 +133,20 @@ public class FileStorage implements TorrentByteStorage {
 		return this.channel.write(data.asByteBuffer(), fileOffset);
 	}
 
+	@SuppressWarnings("ResultOfMethodCallIgnored")
 	@Override
 	public synchronized void close() throws IOException {
 		//logger.debug("Closing file channel to " + this.current.getName() + "...");
-		if (this.channel.isOpen()) {
-			this.channel.force(true);
+		if (this.channel != null) {
+			if (this.channel.isOpen()) {
+				this.channel.force(true);
+			}
+			this.raf.close();
+			if (this.target.exists()) {
+				this.target.delete();
+			}
+			this.channel = null;
 		}
-		this.raf.close();
-		writer.tell(TorrentFileEnd.apply(target.toString()), ActorRef.noSender());
 	}
 
 	/** Move the partial file to its final location.
