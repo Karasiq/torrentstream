@@ -3,7 +3,6 @@ lazy val rootSettings = Seq(
   isSnapshot := true,
   version := "1.0.0-SNAPSHOT",
   scalaVersion := "2.11.7",
-  resolvers += MavenRepository("JBoss Thirdparty Releases", "https://repository.jboss.org/nexus/content/repositories/thirdparty-releases"),
   libraryDependencies ++= {
     val akkaV = "2.4.1"
     Seq(
@@ -15,7 +14,10 @@ lazy val rootSettings = Seq(
       "org.scalatest" %% "scalatest" % "2.2.4" % "test",
       "com.typesafe.akka" %% "akka-stream-experimental" % "2.0.3",
       "com.typesafe.akka" %% "akka-http-experimental" % "2.0.3",
-      "com.turn" % "ttorrent" % "1.4"
+      "commons-codec" % "commons-codec" % "1.8",
+      "commons-io" % "commons-io" % "2.4",
+      "org.simpleframework" % "simple" % "4.1.21",
+      "org.slf4j" % "slf4j-log4j12" % "1.6.4"
     )
   },
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main")

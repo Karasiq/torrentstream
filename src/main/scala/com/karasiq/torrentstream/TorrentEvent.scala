@@ -8,4 +8,14 @@ case class TorrentFileStart(file: String, size: Long) extends TorrentEvent
 
 case class TorrentChunk(file: String, offset: Long, data: ByteString) extends TorrentEvent
 
-case class DownloadTorrent(torrent: ByteString, file: String)
+sealed trait TorrentCommand
+
+case class DownloadTorrent(torrent: ByteString, file: String) extends TorrentCommand
+
+case object InterruptTorrentDownload extends TorrentCommand
+
+sealed trait TorrentStatus
+
+case object TorrentStarted extends TorrentStatus
+
+case object TorrentStopped extends TorrentStatus
