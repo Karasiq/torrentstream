@@ -17,7 +17,10 @@ lazy val rootSettings = Seq(
       "commons-codec" % "commons-codec" % "1.8",
       "commons-io" % "commons-io" % "2.4",
       "org.simpleframework" % "simple" % "4.1.21",
-      "org.slf4j" % "slf4j-log4j12" % "1.6.4"
+      "org.slf4j" % "slf4j-log4j12" % "1.6.4",
+      "com.github.karasiq" %% "mapdbutils" % "1.1.1",
+      "org.mapdb" % "mapdb" % "2.0-beta12",
+      "me.chrons" %% "boopickle" % "1.1.2"
     )
   },
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main")
