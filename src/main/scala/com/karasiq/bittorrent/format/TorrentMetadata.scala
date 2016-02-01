@@ -7,7 +7,7 @@ import akka.util.ByteString
 case class TorrentMetadata(announce: Option[String], announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], files: TorrentFiles)
 
 case class TorrentFiles(name: String, pieceLength: Long, pieces: ByteString, files: Seq[TorrentFileInfo])
-case class TorrentFileInfo(name: String, length: Long)
+case class TorrentFileInfo(name: String, size: Long)
 
 object TorrentMetadata {
   private def asString: PartialFunction[BEncodedValue, String] = {
