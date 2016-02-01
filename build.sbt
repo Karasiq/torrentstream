@@ -25,7 +25,8 @@ lazy val backendSettings = Seq(
       "org.slf4j" % "slf4j-log4j12" % "1.6.4",
       "com.github.karasiq" %% "mapdbutils" % "1.1.1",
       "org.mapdb" % "mapdb" % "2.0-beta12",
-      "me.chrons" %% "boopickle" % "1.1.2"
+      "me.chrons" %% "boopickle" % "1.1.2",
+      "org.parboiled" %% "parboiled" % "2.1.1"
     )
   },
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main"),
