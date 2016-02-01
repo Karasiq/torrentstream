@@ -43,7 +43,7 @@ class AppHandler(store: TorrentStore)(implicit actorSystem: ActorSystem, actorMa
         val torrentId = TorrentInfoHash.fromString(hash)
         validate(store.contains(torrentId), "Invalid torrent id") {
           createTorrentStream(ByteString(store(torrentId)), file, offset) { (size, stream) ⇒
-            respondWithHeader(`Content-Disposition`(ContentDispositionTypes.inline, Map("filename" → new File(file).getName))) {
+            respondWithHeader(`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" → new File(file).getName))) {
               complete(if (offset == 0) StatusCodes.OK else StatusCodes.PartialContent, HttpEntity(ContentTypes.NoContentType, size - offset, stream))
             }
           }
@@ -61,7 +61,7 @@ class AppHandler(store: TorrentStore)(implicit actorSystem: ActorSystem, actorMa
               onSuccess(store.add(torrent.getEncoded)) {
                 extractLog { log ⇒
                   log.info(s"Torrent uploaded: {} {}", torrent.getName, torrent.getHexInfoHash)
-                  complete(StatusCodes.OK, TorrentStoreEntry(torrent.getHexInfoHash, TorrentData.fromTorrent(torrent)))
+                  complete(StatusCodes.OK, TorrentData.fromTorrent(torrent))
                 }
               }
 

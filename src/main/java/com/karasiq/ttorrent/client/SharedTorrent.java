@@ -358,7 +358,7 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 			for (Future<Piece> task : results) {
 				Piece piece = task.get();
 				if (this.pieces[piece.getIndex()].isValid()) {
-//					this.completedPieces.set(piece.getIndex());
+					this.completedPieces.set(piece.getIndex());
 					this.left -= piece.size();
 				}
 			}
@@ -523,7 +523,7 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 		// A completed piece means that's that much data left to download for
 		// this torrent.
 		this.left -= piece.size();
-//		this.completedPieces.set(piece.getIndex());
+		this.completedPieces.set(piece.getIndex());
 	}
 
 	/** PeerActivityListener handler(s). *************************************/
@@ -568,30 +568,43 @@ public class SharedTorrent extends com.karasiq.ttorrent.common.Torrent implement
 	 */
 	@Override
 	public synchronized void handlePeerReady(com.karasiq.ttorrent.client.peer.SharingPeer peer) {
+		if (wantedPieceIndex > wantedPieceLast) {
+			return;
+		}
+
 		BitSet interesting = peer.getAvailablePieces();
 		interesting.andNot(this.completedPieces);
-		interesting.andNot(this.requestedPieces);
+//		interesting.andNot(this.requestedPieces);
 
 		logger.trace("Peer {} is ready and has {} interesting piece(s).",
 			peer, interesting.cardinality());
 
-		if (!interesting.get(wantedPieceIndex) || wantedPieceIndex > wantedPieceLast) {
+		Piece wantedPiece = null;
+        final int maxLookAhead = (wantedPieceLast - wantedPieceIndex) / 5 + 1;
+		for (int i = 0; i < maxLookAhead && (wantedPieceIndex + i) < getPieceCount(); i++) {
+			if (interesting.get(wantedPieceIndex + i)) {
+				wantedPiece = pieces[wantedPieceIndex + i];
+                break;
+			}
+		}
+
+		if (wantedPiece == null) {
 			logger.trace("No interesting piece from {}", peer);
             return;
 		}
 
-		this.requestedPieces.set(wantedPieceIndex, true);
+		this.requestedPieces.set(wantedPiece.getIndex(), true);
 
 		logger.trace("Requesting {} from {}, we now have {} " +
 				"outstanding request(s): {}",
 			new Object[] {
-				wantedPieceIndex,
+				wantedPiece.getIndex(),
 				peer,
 				this.requestedPieces.cardinality(),
 				this.requestedPieces
 			});
 
-		peer.downloadPiece(pieces[wantedPieceIndex]);
+		peer.downloadPiece(wantedPiece);
 	}
 
 	/**
