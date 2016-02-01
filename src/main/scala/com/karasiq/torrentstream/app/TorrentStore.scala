@@ -3,15 +3,31 @@ package com.karasiq.torrentstream.app
 import java.io.Closeable
 import java.nio.file.Paths
 
+import com.karasiq.mapdb.transaction.TxCtx
 import com.karasiq.mapdb.{MapDbSingleFileProducer, MapDbWrapper}
 import com.karasiq.ttorrent.common.Torrent
 import com.typesafe.config.Config
+import org.apache.commons.codec.binary.Hex
 import org.mapdb.DBMaker.Maker
 import org.mapdb.{BTreeKeySerializer, Serializer}
 
-import scala.collection.mutable
+import scala.concurrent.Future
 
-final class TorrentStore(config: Config) extends mutable.AbstractMap[Long, Array[Byte]] with Closeable {
+case class TorrentInfoHash(bytes: Array[Byte]) extends AnyVal {
+  def asString: String = Torrent.byteArrayToHexString(bytes)
+}
+
+object TorrentInfoHash {
+  def fromTorrentData(data: Array[Byte]): TorrentInfoHash = {
+    TorrentInfoHash(new Torrent(data, false).getInfoHash)
+  }
+
+  def fromString(str: String): TorrentInfoHash = {
+    TorrentInfoHash(Hex.decodeHex(str.toCharArray))
+  }
+}
+
+final class TorrentStore(config: Config) extends Map[TorrentInfoHash, Array[Byte]] with Closeable {
   private object DbProvider extends MapDbSingleFileProducer(Paths.get(config.getString("torrentstream.store.path"))) {
     override protected def setSettings(dbMaker: Maker): Maker = {
       dbMaker
@@ -24,50 +40,40 @@ final class TorrentStore(config: Config) extends mutable.AbstractMap[Long, Array
 
   private val db = DbProvider()
 
-  private val nextId = db.db.atomicLong("torrent_id")
-
-  private val map = MapDbWrapper(db).createTreeMap[Long, Array[Byte]]("torrents")(_
-    .keySerializer(BTreeKeySerializer.LONG)
+  private val map = MapDbWrapper(db).createTreeMap[Array[Byte], Array[Byte]]("torrents")(_
+    .keySerializer(BTreeKeySerializer.BYTE_ARRAY)
     .valueSerializer(Serializer.BYTE_ARRAY)
     .nodeSize(32)
     .valuesOutsideNodesEnable()
   )
 
-  override def +=(kv: (Long, Array[Byte])): TorrentStore.this.type = {
-    db.withTransaction { implicit tx ⇒
-      map += kv
-    }
-    this
+  override def +[B1 >: Array[Byte]](kv: (TorrentInfoHash, B1)): Map[TorrentInfoHash, B1] = {
+    throw new IllegalArgumentException
   }
 
-  override def -=(key: Long): TorrentStore.this.type = {
-    db.withTransaction { implicit tx ⇒
-      map -= key
-    }
-    this
+  override def -(key: TorrentInfoHash): Map[TorrentInfoHash, Array[Byte]] = {
+    throw new IllegalArgumentException
   }
 
-  override def get(key: Long): Option[Array[Byte]] = {
-    map.get(key)
+  override def get(key: TorrentInfoHash): Option[Array[Byte]] = {
+    map.get(key.bytes)
   }
 
-  override def iterator: Iterator[(Long, Array[Byte])] = {
-    map.iterator
+  override def iterator: Iterator[(TorrentInfoHash, Array[Byte])] = {
+    map.iterator.map(kv ⇒ TorrentInfoHash(kv._1) → kv._2)
   }
 
-  def lastIndex: Long = {
-    nextId.get()
+  override def contains(key: TorrentInfoHash): Boolean = {
+    map.contains(key.bytes)
   }
 
   def torrents: Iterator[Torrent] = {
-    this.valuesIterator.map(new Torrent(_, false))
+    map.valuesIterator.map(new Torrent(_, false))
   }
 
-  def add(data: Array[Byte]): Long = {
-    db.withTransaction { implicit tx ⇒
-      val index = nextId.getAndIncrement()
-      map += index → data
-      index
+  def add(data: Array[Byte])(implicit tx: TxCtx = db.newTransaction): Future[Unit] = {
+    db.scheduleTransaction { implicit tx ⇒
+      map += TorrentInfoHash.fromTorrentData(data).bytes → data
     }
   }
 

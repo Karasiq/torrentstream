@@ -1,7 +1,9 @@
 package com.karasiq.torrentstream.app
 
+import java.io.File
+
 import akka.actor.{ActorSystem, Props}
-import akka.http.scaladsl.model.headers.Range
+import akka.http.scaladsl.model.headers.{ContentDispositionTypes, Range, `Content-Disposition`}
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, StatusCodes}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server._
@@ -15,8 +17,6 @@ import com.karasiq.ttorrent.common.Torrent
 
 import scala.collection.JavaConversions._
 import scala.util.{Failure, Success, Try}
-
-case class TorrentEntry(id: Long, data: Torrent)
 
 class AppHandler(store: TorrentStore)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) extends AppSerializers {
   // Extracts `Range` header value
@@ -39,22 +39,30 @@ class AppHandler(store: TorrentStore)(implicit actorSystem: ActorSystem, actorMa
 
   val route = {
     get {
-      (pathSingleSlash & offsetValue & parameters('torrentId.as[Long], 'file)) { (offset, torrentId, file) ⇒
+      (path("stream") & offsetValue & parameters('hash, 'file)) { (offset, hash, file) ⇒
+        val torrentId = TorrentInfoHash.fromString(hash)
         validate(store.contains(torrentId), "Invalid torrent id") {
           createTorrentStream(ByteString(store(torrentId)), file, offset) { (size, stream) ⇒
-            complete(if (offset == 0) StatusCodes.OK else StatusCodes.PartialContent, HttpEntity(ContentTypes.NoContentType, size - offset, stream))
+            respondWithHeader(`Content-Disposition`(ContentDispositionTypes.inline, Map("filename" → new File(file).getName))) {
+              complete(if (offset == 0) StatusCodes.OK else StatusCodes.PartialContent, HttpEntity(ContentTypes.NoContentType, size - offset, stream))
+            }
           }
         }
-      }
+      } ~
+      pathEndOrSingleSlash {
+        getFromResource("webapp/index.html")
+      } ~
+      getFromResourceDirectory("webapp")
     } ~
       post {
         (path("upload") & entity(as[Array[Byte]])) { data ⇒
           Try(new Torrent(data, false)) match {
             case Success(torrent) ⇒
-              extractLog { log ⇒
-                val id = store.add(torrent.getEncoded)
-                log.info(s"Torrent uploaded: {} {} (id = {})", torrent.getName, torrent.getHexInfoHash, id)
-                complete(StatusCodes.OK, TorrentEntry(id, torrent))
+              onSuccess(store.add(torrent.getEncoded)) {
+                extractLog { log ⇒
+                  log.info(s"Torrent uploaded: {} {}", torrent.getName, torrent.getHexInfoHash)
+                  complete(StatusCodes.OK, TorrentStoreEntry(torrent.getHexInfoHash, TorrentData.fromTorrent(torrent)))
+                }
               }
 
             case Failure(_) ⇒

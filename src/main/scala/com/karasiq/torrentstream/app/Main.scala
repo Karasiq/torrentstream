@@ -1,11 +1,8 @@
 package com.karasiq.torrentstream.app
 
-import java.io.File
-
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 import akka.stream.ActorMaterializer
-import com.karasiq.ttorrent.common.Torrent
 import com.typesafe.config.ConfigFactory
 import org.apache.log4j.BasicConfigurator
 
@@ -31,6 +28,4 @@ object Main extends App {
 
   val handler = new AppHandler(store)
   Http().bindAndHandle(handler.route, "localhost", 8901)
-
-  Torrent.load(new File(sys.props("test.torrent.path")), false)
 }
