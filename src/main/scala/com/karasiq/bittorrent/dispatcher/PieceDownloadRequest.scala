@@ -1,7 +1,12 @@
 package com.karasiq.bittorrent.dispatcher
 
 import akka.util.ByteString
+import com.karasiq.bittorrent.format.TorrentPiece
 
-case class PieceDownloadRequest(pieceIndex: Int, sha1: ByteString)
+case class PieceDownloadRequest(index: Int, piece: TorrentPiece)
 
-case class DownloadedPiece(pieceIndex: Int, data: ByteString)
+sealed trait PieceDownloadResult
+
+case object PieceDownloadFailed extends PieceDownloadResult
+
+case class DownloadedPiece(pieceIndex: Int, data: ByteString) extends PieceDownloadResult

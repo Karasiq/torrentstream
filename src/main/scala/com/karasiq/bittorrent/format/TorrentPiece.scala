@@ -6,6 +6,7 @@ import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 
 case class TorrentPiece(size: Long, sha1: ByteString, file: TorrentFileInfo)
+case class TorrentPieceBlock(offset: Long, size: Long)
 
 object TorrentPiece {
   def sequence(files: TorrentFiles): IndexedSeq[TorrentPiece] = {
@@ -26,5 +27,18 @@ object TorrentPiece {
         buffer.result()
     }
     pieceSequenceRec(new ArrayBuffer[TorrentPiece](files.pieces.length / 20), 0L, 0L, 0, files.files)
+  }
+
+  def blocks(piece: TorrentPiece, sizeLimit: Long): IndexedSeq[TorrentPieceBlock] = {
+    @tailrec
+    def pieceBlockRec(buffer: ArrayBuffer[TorrentPieceBlock], offset: Long): IndexedSeq[TorrentPieceBlock] = {
+      if (offset >= piece.size) {
+        buffer.result()
+      } else {
+        val block = TorrentPieceBlock(offset, Seq(sizeLimit, piece.size - offset).min)
+        pieceBlockRec(buffer :+ block, offset + block.size)
+      }
+    }
+    pieceBlockRec(new ArrayBuffer[TorrentPieceBlock]((piece.size / sizeLimit + 1).toInt), 0L)
   }
 }

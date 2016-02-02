@@ -15,6 +15,19 @@ object PeerProtocol {
   case class PeerHandshake(protocol: String, infoHash: ByteString, peerId: ByteString) {
     require(infoHash.length == 20)
     require(peerId.length == 20)
+
+    def toBytes: ByteString = {
+      val protocolBytes = protocol.getBytes("ASCII")
+      assert(protocolBytes.length <= Byte.MaxValue)
+      val byteBuffer = ByteBuffer.allocate(1 + 8 + protocolBytes.length + 20 + 20)
+      byteBuffer.put(protocolBytes.length.toByte)
+      byteBuffer.put(protocolBytes)
+      byteBuffer.put(ByteString(0, 0, 0, 0, 0, 0, 0, 0).toByteBuffer)
+      byteBuffer.put(infoHash.toByteBuffer)
+      byteBuffer.put(peerId.toByteBuffer)
+      byteBuffer.flip()
+      ByteString(byteBuffer)
+    }
   }
 
   case class PeerMessage(id: Int, payload: ByteString) {
@@ -25,19 +38,6 @@ object PeerProtocol {
       byteBuffer.put(payload.toByteBuffer)
       byteBuffer.flip()
       ByteString(byteBuffer)
-    }
-  }
-
-  object PeerMessage {
-    def unapply(v: ByteString): Option[(Int, ByteString)] = {
-      Try {
-        val buffer = v.toByteBuffer
-        val length = buffer.getInt
-        val id = buffer.get().toInt
-        val array = new Array[Byte](length)
-        buffer.get(array)
-        (id, ByteString(array))
-      }.toOption
     }
   }
 
@@ -95,108 +95,140 @@ object PeerProtocol {
     }
   }
 
-  object KeepAlive {
-    def unapplySeq(v: ByteString): Option[Seq[Unit]] = {
-      if (v == ByteString(0, 0, 0, 0)) Some(Seq()) else None
+  object Msg {
+    def unapply(v: ByteString): Option[PeerMessage] = {
+      Try {
+        val buffer = v.toByteBuffer
+        val length = buffer.getInt
+        val id = buffer.get().toInt
+        val array = new Array[Byte](length)
+        buffer.get(array)
+        PeerMessage(id, ByteString(array))
+      }.toOption
     }
-  }
-  object Choke extends EmptyMessage(0)
-  object Unchoke extends EmptyMessage(1)
-  object Interested extends EmptyMessage(2)
-  object NotInterested extends EmptyMessage(3)
-  object Have extends EmptyMessage(4)
 
-  private def readBitField(values: ByteString): BitSet = {
-    val buffer = values.toByteBuffer
-    val bitSet = new mutable.BitSet(buffer.remaining()*8)
-    (0 until buffer.remaining()*8).foreach { i ⇒
-      bitSet.update(i, (buffer.get(i/8) & (1 << (7 -(i % 8)))) > 0)
-    }
-    bitSet
-  }
-
-  private def writeBitField(values: BitSet): ByteString = {
-    val bitfield = new Array[Byte](values.size)
-    for (i <- values) {
-      bitfield(i/8) |= 1 << (7 -(i % 8))
-    }
-    ByteString(bitfield)
-  }
-
-  object BitField {
-    def unapply(m: PeerMessage): Option[BitSet] = {
-      if (m.id == 5) {
-        Try(readBitField(m.payload)).toOption
-      } else {
-        None
+    object Handshake {
+      def unapply(v: ByteString): Option[PeerHandshake] = {
+        new Reader(v.toArray[Byte]).Handshake.run().toOption
       }
     }
 
-    def apply(v: BitSet): PeerMessage = {
-      PeerMessage(5, writeBitField(v))
-    }
-  }
-
-  object Request {
-    def unapply(m: PeerMessage): Option[PieceRequest] = {
-      if (m.id == 6) {
-        Try {
-          val buffer = m.payload.toByteBuffer
-          val index = buffer.getInt
-          val offset = buffer.getInt
-          val length = buffer.getInt
-          PieceRequest(index, offset, length)
-        }.toOption
-      } else {
-        None
+    object KeepAlive {
+      def unapplySeq(v: ByteString): Option[Seq[Unit]] = {
+        if (v == ByteString(0, 0, 0, 0)) Some(Seq()) else None
       }
     }
-  }
 
-  object Piece {
-    def unapply(m: PeerMessage): Option[PieceBlock] = {
-      if (m.id == 7) {
-        Try {
-          val buffer = m.payload.toByteBuffer
-          val index = buffer.getInt
-          val offset = buffer.getInt
-          val array = new Array[Byte](buffer.remaining())
-          buffer.get(array)
-          PieceBlock(index, offset, ByteString(array))
-        }.toOption
-      } else {
-        None
+    object Choke extends EmptyMessage(0)
+    object Unchoke extends EmptyMessage(1)
+    object Interested extends EmptyMessage(2)
+    object NotInterested extends EmptyMessage(3)
+    object Have {
+      def unapply(m: PeerMessage): Option[Int] = {
+        if (m.id == 4) {
+          Try(BigInt(m.payload.toArray[Byte]).intValue()).toOption
+        } else {
+          None
+        }
+      }
+
+      def apply(v: Int): PeerMessage = {
+        PeerMessage(4, ByteString(BigInt(v).toByteArray))
       }
     }
-  }
 
-  object Cancel {
-    def unapply(m: PeerMessage): Option[PieceRequest] = {
-      if (m.id == 8) {
-        Try {
-          val buffer = m.payload.toByteBuffer
-          val index = buffer.getInt
-          val offset = buffer.getInt
-          val length = buffer.getInt
-          PieceRequest(index, offset, length)
-        }.toOption
-      } else {
-        None
+    private def readBitField(values: ByteString): BitSet = {
+      val buffer = values.toByteBuffer
+      val bitSet = new mutable.BitSet(buffer.remaining()*8)
+      (0 until buffer.remaining()*8).foreach { i ⇒
+        bitSet.update(i, (buffer.get(i/8) & (1 << (7 -(i % 8)))) > 0)
+      }
+      bitSet
+    }
+
+    private def writeBitField(values: BitSet): ByteString = {
+      val bitfield = new Array[Byte](values.size)
+      for (i <- values) {
+        bitfield(i/8) |= 1 << (7 -(i % 8))
+      }
+      ByteString(bitfield)
+    }
+
+    object BitField {
+      def unapply(m: PeerMessage): Option[BitSet] = {
+        if (m.id == 5) {
+          Try(readBitField(m.payload)).toOption
+        } else {
+          None
+        }
+      }
+
+      def apply(v: BitSet): PeerMessage = {
+        PeerMessage(5, writeBitField(v))
       }
     }
-  }
 
-  object Port {
-    def unapply(m: PeerMessage): Option[Int] = {
-      if (m.id == 9) {
-        Try {
-          val buffer = m.payload.toByteBuffer
-          val array = new Array[Byte](2)
-          buffer.get(array)
-          BigInt(array).intValue()
-        }.toOption
-      } else {
-        None
+    object Request {
+      def unapply(m: PeerMessage): Option[PieceRequest] = {
+        if (m.id == 6) {
+          Try {
+            val buffer = m.payload.toByteBuffer
+            val index = buffer.getInt
+            val offset = buffer.getInt
+            val length = buffer.getInt
+            PieceRequest(index, offset, length)
+          }.toOption
+        } else {
+          None
+        }
+      }
+    }
+
+    object Piece {
+      def unapply(m: PeerMessage): Option[PieceBlock] = {
+        if (m.id == 7) {
+          Try {
+            val buffer = m.payload.toByteBuffer
+            val index = buffer.getInt
+            val offset = buffer.getInt
+            val array = new Array[Byte](buffer.remaining())
+            buffer.get(array)
+            PieceBlock(index, offset, ByteString(array))
+          }.toOption
+        } else {
+          None
+        }
+      }
+    }
+
+    object Cancel {
+      def unapply(m: PeerMessage): Option[PieceRequest] = {
+        if (m.id == 8) {
+          Try {
+            val buffer = m.payload.toByteBuffer
+            val index = buffer.getInt
+            val offset = buffer.getInt
+            val length = buffer.getInt
+            PieceRequest(index, offset, length)
+          }.toOption
+        } else {
+          None
+        }
+      }
+    }
+
+    object Port {
+      def unapply(m: PeerMessage): Option[Int] = {
+        if (m.id == 9) {
+          Try {
+            val buffer = m.payload.toByteBuffer
+            val array = new Array[Byte](2)
+            buffer.get(array)
+            BigInt(array).intValue()
+          }.toOption
+        } else {
+          None
+        }
       }
     }
   }
