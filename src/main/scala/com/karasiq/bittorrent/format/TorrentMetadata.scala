@@ -4,6 +4,7 @@ import java.io.FileInputStream
 import java.time.Instant
 
 import akka.util.ByteString
+import com.karasiq.bittorrent.format.BEncodeImplicits._
 import org.apache.commons.io.IOUtils
 
 import scala.util.Try
@@ -14,27 +15,17 @@ case class TorrentFiles(name: String, pieceLength: Long, pieces: ByteString, fil
 case class TorrentFileInfo(name: String, size: Long)
 
 object TorrentMetadata {
-  private def asString: PartialFunction[BEncodedValue, String] = {
-    case BEncodedString(str) ⇒
-      str
-  }
-
-  private def asNumber: PartialFunction[BEncodedValue, Long] = {
-    case BEncodedNumber(num) ⇒
-      num
-  }
-
   private def asAnnounceList: PartialFunction[BEncodedValue, Seq[Seq[String]]] = {
     case BEncodedArray(values) ⇒
       values.collect {
         case BEncodedArray(urls) ⇒
-          urls.collect(asString)
+          urls.map(_.asString)
       }
   }
 
   private def asPathSeq: PartialFunction[BEncodedValue, String] = {
     case BEncodedArray(values) ⇒
-      values.collect(asString).mkString("/")
+      values.map(_.asString).mkString("/")
   }
 
   private def filesInfo(v: BEncodedValue): Option[TorrentFiles] = v match {
@@ -51,14 +42,10 @@ object TorrentMetadata {
               Nil
           }
       }
-      val length = data.get("length").collect(asNumber)
-      val name = data.get("name").collect(asString)
-      val pieceLength = data.get("piece length").collect(asNumber)
-      val pieces = data.get("pieces").collect {
-        case BEncodedString(value) ⇒
-          ByteString(value.getBytes("ASCII"))
-      }
-
+      val length = data.number("length")
+      val name = data.string("name")
+      val pieceLength = data.number("piece length")
+      val pieces = data.get("pieces").map(_.asByteString)
       if (files.isDefined) {
         for {
           name <- name
@@ -82,12 +69,12 @@ object TorrentMetadata {
   def decode(encoded: Seq[BEncodedValue]): Option[TorrentMetadata] = encoded match {
     case Seq(BEncodedDictionary(values)) ⇒
       val map = values.toMap
-      val announce = map.get("announce").collect(asString)
+      val announce = map.string("announce")
       val announceList = map.get("announce-list").collect(asAnnounceList)
-      val comment = map.get("comment").collect(asString)
-      val createdBy = map.get("created by").collect(asString)
-      val encoding = map.get("encoding").collect(asString)
-      val date = map.get("creation date").collect(asNumber).map(Instant.ofEpochSecond)
+      val comment = map.string("comment")
+      val createdBy = map.string("created by")
+      val encoding = map.string("encoding")
+      val date = map.number("creation date").map(Instant.ofEpochSecond)
       val files = map.get("info").flatMap(filesInfo)
       files.map(TorrentMetadata(announce, announceList.getOrElse(Nil), createdBy, comment, encoding, date, _))
 

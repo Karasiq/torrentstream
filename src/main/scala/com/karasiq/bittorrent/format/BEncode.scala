@@ -1,5 +1,6 @@
 package com.karasiq.bittorrent.format
 
+import akka.util.ByteString
 import org.parboiled2._
 
 sealed trait BEncodedValue
@@ -29,3 +30,87 @@ object BEncode {
     new BEncode(bytes).EncodedFile.run().getOrElse(Nil)
   }
 }
+
+object BEncodeImplicits {
+  implicit class BEncodedValueOps(val value: BEncodedValue) extends AnyVal {
+    def asDict: Map[String, BEncodedValue] = value match {
+      case BEncodedDictionary(values) ⇒
+        values
+
+      case _ ⇒
+        Map.empty
+    }
+
+    def asArray: Seq[BEncodedValue] = value match {
+      case BEncodedArray(values) ⇒
+        values
+
+      case _ ⇒
+        Nil
+    }
+
+    def asString: String = value match {
+      case BEncodedString(str) ⇒
+        str
+
+      case _ ⇒
+        throw new IllegalArgumentException
+    }
+
+    def asNumber: Long = value match {
+      case BEncodedNumber(num) ⇒
+        num
+
+      case _ ⇒
+        throw new IllegalArgumentException
+    }
+
+    def asByteString: ByteString = ByteString(asString.getBytes("ASCII"))
+  }
+
+  implicit class BEncodedDictOps(val dict: Map[String, BEncodedValue]) extends AnyVal {
+    def string(key: String): Option[String] = dict.get(key).collect {
+      case BEncodedString(str) ⇒
+        str
+    }
+
+    def number(key: String): Option[Long] = dict.get(key).collect {
+      case BEncodedNumber(num) ⇒
+        num
+    }
+
+    def array(key: String): Seq[BEncodedValue] = dict.get(key).map(_.asArray).getOrElse(Nil)
+
+    def dict(key: String): Map[String, BEncodedValue] = dict.get(key).map(_.asDict).getOrElse(Map.empty)
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

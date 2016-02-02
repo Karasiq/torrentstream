@@ -4,7 +4,6 @@ import java.security.MessageDigest
 
 import akka.actor._
 import akka.pattern.{ask, pipe}
-import akka.stream.ActorMaterializer
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import com.karasiq.bittorrent.format.TorrentMetadata
@@ -15,7 +14,7 @@ import scala.concurrent.duration._
 import scala.language.postfixOps
 import scala.util.Random
 
-class PeerDispatcher(torrent: TorrentMetadata)(implicit am: ActorMaterializer) extends Actor with ActorLogging with Stash {
+class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.dispatcher
   private val peers = mutable.Map.empty[ActorRef, PeerData]
 
@@ -31,11 +30,14 @@ class PeerDispatcher(torrent: TorrentMetadata)(implicit am: ActorMaterializer) e
         log.info("Piece download request: {} with hash {}", index, Hex.encodeHexString(piece.sha1.toArray))
       }
       val seeders = Random.shuffle(peers.collect {
-        case (peer, data) if data.completed(index) && !data.chokingBy ⇒
+        case (peer, data) if data.completed(index) && !data.chokedBy ⇒
           peer
       })
       val result = Source(seeders.toVector)
-        .mapAsyncUnordered(3)(peer ⇒ (peer ? request).mapTo[DownloadedPiece])
+        .mapAsyncUnordered(3)(peer ⇒ (peer ? request).collect {
+          case dp: DownloadedPiece ⇒
+            dp
+        })
         .filter(r ⇒ checkHash(r.data, piece.sha1))
         .runWith(Sink.head)
       result.pipeTo(context.sender())
@@ -43,7 +45,7 @@ class PeerDispatcher(torrent: TorrentMetadata)(implicit am: ActorMaterializer) e
     case c @ ConnectPeer(address, data) ⇒
       if (!peers.exists(_._2.address == address)) {
         log.info("Connecting to: {}", address)
-        context.actorOf(Props(new PeerConnection(torrent))) ! c
+        context.actorOf(Props(classOf[PeerConnection], torrent)) ! c
       }
 
     case PeerConnected(peerData) ⇒
