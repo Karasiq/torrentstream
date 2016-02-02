@@ -9,7 +9,7 @@ class BEncodeTest extends FlatSpec with Matchers  {
 
   "BEncode parser" should "parse torrent file" in {
     val data = BEncode.parse(testFile)
-    val torrent = TorrentMetadata.decode(data)
+    val torrent = TorrentMetadata.decode(data).get
     torrent.announce shouldBe Some("http://torrent.ubuntu.com:6969/announce")
     torrent.announceList shouldBe Vector(Vector("http://torrent.ubuntu.com:6969/announce"), Vector("http://ipv6.torrent.ubuntu.com:6969/announce"))
     torrent.comment shouldBe Some("Ubuntu CD releases.ubuntu.com")
@@ -21,7 +21,7 @@ class BEncodeTest extends FlatSpec with Matchers  {
 
   "Torrent pieces" should "be constructed" in {
     val data = BEncode.parse(testFile)
-    val torrent = TorrentMetadata.decode(data)
+    val torrent = TorrentMetadata.decode(data).get
     val pieces = TorrentPiece.sequence(torrent.files)
     pieces.length shouldBe (torrent.files.pieces.length / 20)
     pieces.head.sha1.length shouldBe 20

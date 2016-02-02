@@ -1,8 +1,12 @@
 package com.karasiq.bittorrent.format
 
+import java.io.FileInputStream
 import java.time.Instant
 
 import akka.util.ByteString
+import org.apache.commons.io.IOUtils
+
+import scala.util.Try
 
 case class TorrentMetadata(announce: Option[String], announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], files: TorrentFiles)
 
@@ -75,7 +79,7 @@ object TorrentMetadata {
       None
   }
 
-  def decode(encoded: Seq[BEncodedValue]): TorrentMetadata = encoded match {
+  def decode(encoded: Seq[BEncodedValue]): Option[TorrentMetadata] = encoded match {
     case Seq(BEncodedDictionary(values)) ⇒
       val map = values.toMap
       val announce = map.get("announce").collect(asString)
@@ -85,7 +89,20 @@ object TorrentMetadata {
       val encoding = map.get("encoding").collect(asString)
       val date = map.get("creation date").collect(asNumber).map(Instant.ofEpochSecond)
       val files = map.get("info").flatMap(filesInfo)
+      files.map(TorrentMetadata(announce, announceList.getOrElse(Nil), createdBy, comment, encoding, date, _))
 
-      TorrentMetadata(announce, announceList.getOrElse(Nil), createdBy, comment, encoding, date, files.getOrElse(throw new IllegalArgumentException("Invalid torrent file")))
+    case _ ⇒
+      None
+  }
+
+  def apply(data: ByteString): Option[TorrentMetadata] = {
+    this.decode(BEncode.parse(data.toArray[Byte]))
+  }
+
+  def fromFile(file: String): Option[TorrentMetadata] = {
+    val inputStream = new FileInputStream(file)
+    val result = Try(this.decode(BEncode.parse(IOUtils.toByteArray(inputStream))))
+    IOUtils.closeQuietly(inputStream)
+    result.getOrElse(None)
   }
 }

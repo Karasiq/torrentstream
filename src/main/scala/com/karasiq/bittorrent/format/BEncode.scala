@@ -13,7 +13,7 @@ class BEncode(val input: ParserInput) extends Parser {
 
   def NumericValue: Rule1[BEncodedNumber] = rule { 'i' ~ Number ~ 'e' ~> BEncodedNumber }
 
-  def StringValue: Rule1[BEncodedString] = rule { Number ~ ':' ~> (length ⇒ capture((1 to length.toInt).times(CharPredicate.All))) ~> BEncodedString }
+  def StringValue: Rule1[BEncodedString] = rule { Number ~ ':' ~> (length ⇒ test(length >= 0) ~ capture(length.toInt.times(CharPredicate.All))) ~> BEncodedString }
 
   def ArrayValue: Rule1[BEncodedArray] = rule { 'l' ~ oneOrMore(Value) ~ 'e' ~> BEncodedArray }
 
