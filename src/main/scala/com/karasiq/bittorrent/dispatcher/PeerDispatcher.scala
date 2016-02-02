@@ -5,7 +5,7 @@ import java.security.MessageDigest
 import akka.actor._
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl._
-import akka.util.ByteString
+import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.format.TorrentMetadata
 import org.apache.commons.codec.binary.Hex
 
@@ -25,10 +25,12 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
 
   override def receive: Receive = {
     case request @ PieceDownloadRequest(index, piece) ⇒
-      implicit val timeout = 3 minutes
+      implicit val timeout = Timeout(30 seconds)
+
       if (log.isInfoEnabled) {
         log.info("Piece download request: {} with hash {}", index, Hex.encodeHexString(piece.sha1.toArray))
       }
+
       val seeders = Random.shuffle(peers.collect {
         case (peer, data) if data.completed(index) && !data.chokedBy ⇒
           peer

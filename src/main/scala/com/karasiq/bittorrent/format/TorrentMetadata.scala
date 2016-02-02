@@ -1,6 +1,7 @@
 package com.karasiq.bittorrent.format
 
 import java.io.FileInputStream
+import java.security.MessageDigest
 import java.time.Instant
 
 import akka.util.ByteString
@@ -9,7 +10,9 @@ import org.apache.commons.io.IOUtils
 
 import scala.util.Try
 
-case class TorrentMetadata(announce: Option[String], announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], files: TorrentFiles)
+case class TorrentMetadata(infoHash: ByteString, announce: String, announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], files: TorrentFiles) {
+  def size: Long = files.files.map(_.size).sum
+}
 
 case class TorrentFiles(name: String, pieceLength: Long, pieces: ByteString, files: Seq[TorrentFileInfo])
 case class TorrentFileInfo(name: String, size: Long)
@@ -34,7 +37,7 @@ object TorrentMetadata {
         case BEncodedArray(fileList) ⇒
           fileList.flatMap {
             case BEncodedDictionary(fileData) ⇒
-              for (path <- fileData.get("path").collect(asPathSeq); length <- fileData.get("length").collect(asNumber)) yield {
+              for (path <- fileData.get("path").collect(asPathSeq); length <- fileData.number("length")) yield {
                 TorrentFileInfo(path, length)
               }
 
@@ -66,6 +69,11 @@ object TorrentMetadata {
       None
   }
 
+  private def infoHash(v: BEncodedValue): ByteString = {
+    val md = MessageDigest.getInstance("SHA-1")
+    ByteString(md.digest(v.toBytes.toArray[Byte]))
+  }
+
   def decode(encoded: Seq[BEncodedValue]): Option[TorrentMetadata] = encoded match {
     case Seq(BEncodedDictionary(values)) ⇒
       val map = values.toMap
@@ -75,8 +83,10 @@ object TorrentMetadata {
       val createdBy = map.string("created by")
       val encoding = map.string("encoding")
       val date = map.number("creation date").map(Instant.ofEpochSecond)
-      val files = map.get("info").flatMap(filesInfo)
-      files.map(TorrentMetadata(announce, announceList.getOrElse(Nil), createdBy, comment, encoding, date, _))
+      val info = map.get("info")
+      for (announce <- announce.orElse(announceList.flatMap(_.headOption.flatMap(_.headOption))); infoHash <- info.map(infoHash); files <- info.flatMap(filesInfo)) yield {
+        TorrentMetadata(infoHash, announce, announceList.getOrElse(Nil), createdBy, comment, encoding, date, files)
+      }
 
     case _ ⇒
       None

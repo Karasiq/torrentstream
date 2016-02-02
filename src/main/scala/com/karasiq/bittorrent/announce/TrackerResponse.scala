@@ -27,20 +27,25 @@ object TrackerResponse {
           } yield TrackerPeer(id, InetSocketAddress.createUnresolved(ip, port.toInt))
       }.flatten
 
-    case BEncodedString(peers) ⇒ // Compact
+    case s: BEncodedString ⇒ // Compact
+      def readPort(bytes: ByteString): Int = {
+        require(bytes.length == 2)
+        BigInt((ByteString(0, 0) ++ bytes).toArray[Byte]).intValue()
+      }
+
       @tailrec
       def parsePeerString(peers: ArrayBuffer[TrackerPeer], ps: ByteString): Seq[TrackerPeer] = {
         if (ps.isEmpty) peers.result() else {
-          val address = new InetSocketAddress(InetAddress.getByAddress(ps.take(4).toArray), BigInt(ps.drop(4).take(2).toArray).intValue())
+          val address = new InetSocketAddress(InetAddress.getByAddress(ps.take(4).toArray), readPort(ps.drop(4).take(2)))
           parsePeerString(peers :+ TrackerPeer(None, address), ps.drop(6))
         }
       }
-      val bytes = ByteString(peers.getBytes("ASCII"))
+      val bytes = s.asByteString
       parsePeerString(new ArrayBuffer[TrackerPeer](bytes.length / 6), bytes)
   }
 
-  def fromString(str: String): Either[TrackerError, TrackerResponse] = {
-    val data = BEncode.parse(str)
+  def fromBytes(str: ByteString): Either[TrackerError, TrackerResponse] = {
+    val data = BEncode.parse(str.toArray[Byte])
     data match {
       case Seq(BEncodedDictionary(map)) ⇒
         val error = map.string("failure reason")
@@ -61,7 +66,7 @@ object TrackerResponse {
         }
 
       case _ ⇒
-        Left(TrackerError(s"Not a BEncoded value: $str"))
+        Left(TrackerError(s"Not a BEncoded value: ${str.utf8String}"))
     }
   }
 }

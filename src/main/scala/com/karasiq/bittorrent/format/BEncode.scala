@@ -3,11 +3,30 @@ package com.karasiq.bittorrent.format
 import akka.util.ByteString
 import org.parboiled2._
 
-sealed trait BEncodedValue
-case class BEncodedString(string: String) extends BEncodedValue
-case class BEncodedNumber(number: Long) extends BEncodedValue
-case class BEncodedArray(values: Seq[BEncodedValue]) extends BEncodedValue
-case class BEncodedDictionary(values: Map[String, BEncodedValue]) extends BEncodedValue
+sealed trait BEncodedValue {
+  def toBytes: ByteString
+}
+case class BEncodedString(string: String) extends BEncodedValue {
+  override def toBytes: ByteString = {
+    val bytes = ByteString(string.toCharArray.map(_.toByte))
+    ByteString(bytes.length.toString + ":") ++ bytes
+  }
+}
+case class BEncodedNumber(number: Long) extends BEncodedValue {
+  override def toBytes: ByteString = {
+    ByteString("i") ++ ByteString(number.toString) ++ ByteString("e")
+  }
+}
+case class BEncodedArray(values: Seq[BEncodedValue]) extends BEncodedValue {
+  override def toBytes: ByteString = {
+    ByteString("l") ++ values.map(_.toBytes).fold(ByteString.empty)(_ ++ _) ++ ByteString("e")
+  }
+}
+case class BEncodedDictionary(values: Map[String, BEncodedValue]) extends BEncodedValue {
+  override def toBytes: ByteString = {
+    ByteString("d") ++ values.map(kv ⇒ BEncodedString(kv._1).toBytes ++ kv._2.toBytes).fold(ByteString.empty)(_ ++ _) ++ ByteString("e")
+  }
+}
 
 class BEncode(val input: ParserInput) extends Parser {
   def Number: Rule1[Long] = rule { capture(optional('-') ~ oneOrMore(CharPredicate.Digit)) ~> ((s: String) ⇒ s.toLong) }
@@ -22,7 +41,7 @@ class BEncode(val input: ParserInput) extends Parser {
 
   def Value: Rule1[BEncodedValue] = rule { NumericValue | StringValue | ArrayValue | DictionaryValue }
 
-  def EncodedFile: Rule1[Seq[BEncodedValue]] = rule { oneOrMore(Value) }
+  def EncodedFile: Rule1[Seq[BEncodedValue]] = rule { oneOrMore(Value) ~ EOI }
 }
 
 object BEncode {
@@ -65,7 +84,7 @@ object BEncodeImplicits {
         throw new IllegalArgumentException
     }
 
-    def asByteString: ByteString = ByteString(asString.getBytes("ASCII"))
+    def asByteString: ByteString = ByteString(asString.toCharArray.map(_.toByte))
   }
 
   implicit class BEncodedDictOps(val dict: Map[String, BEncodedValue]) extends AnyVal {

@@ -17,7 +17,7 @@ object PeerProtocol {
     require(peerId.length == 20)
 
     def toBytes: ByteString = {
-      val protocolBytes = protocol.getBytes("ASCII")
+      val protocolBytes = protocol.toCharArray.map(_.toByte)
       assert(protocolBytes.length <= Byte.MaxValue)
       val byteBuffer = ByteBuffer.allocate(1 + 8 + protocolBytes.length + 20 + 20)
       byteBuffer.put(protocolBytes.length.toByte)
@@ -65,11 +65,11 @@ object PeerProtocol {
 
   class Reader(val input: ParserInput) extends Parser {
     def ByteNumber: Rule1[Int] = rule { capture(CharPredicate.All) ~>
-      { (v: String) ⇒ v.getBytes("ASCII")(0).toInt }
+      { (v: String) ⇒ v.toCharArray.apply(0).toInt }
     }
 
     def ByteFrame(length: Int): Rule1[ByteString] = rule { capture(20.times(CharPredicate.All)) ~>
-      { (v: String) ⇒ ByteString(v.getBytes("ASCII")) }
+      { (v: String) ⇒ ByteString(v.toCharArray.map(_.toByte)) }
     }
 
     def SizedString: Rule1[String] = rule { ByteNumber ~>
@@ -149,7 +149,7 @@ object PeerProtocol {
     private def writeBitField(values: BitSet): ByteString = {
       val bitfield = new Array[Byte](values.size)
       for (i <- values) {
-        bitfield(i/8) |= 1 << (7 -(i % 8))
+        bitfield.update(i/8, (bitfield(i/8) | 1 << (7 - (i % 8))).toByte)
       }
       ByteString(bitfield)
     }
@@ -224,7 +224,7 @@ object PeerProtocol {
             val buffer = m.payload.toByteBuffer
             val array = new Array[Byte](2)
             buffer.get(array)
-            BigInt(array).intValue()
+            BigInt((ByteString(0, 0) ++ ByteString(array)).toArray).intValue()
           }.toOption
         } else {
           None
