@@ -33,11 +33,13 @@ object TorrentMetadata {
   }
 
   private def filesInfo(v: BEncodedValue): Option[TorrentFiles] = v match {
-    case BEncodedDictionary(data) ⇒
+    case BEncodedDictionary(seq) ⇒
+      val data = seq.toMap
       val files = data.get("files").collect {
         case BEncodedArray(fileList) ⇒
           fileList.flatMap {
-            case BEncodedDictionary(fileData) ⇒
+            case BEncodedDictionary(fileValues) ⇒
+              val fileData = fileValues.toMap
               for (path <- fileData.get("path").collect(asPathSeq); length <- fileData.number("length")) yield {
                 TorrentFileInfo(path, length)
               }

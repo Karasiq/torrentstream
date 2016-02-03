@@ -19,7 +19,8 @@ object TrackerResponse {
   private def parsePeers: PartialFunction[BEncodedValue, Seq[TrackerPeer]] = {
     case BEncodedArray(peers) ⇒
       peers.collect {
-        case BEncodedDictionary(peer) ⇒
+        case BEncodedDictionary(values) ⇒
+          val peer = values.toMap
           for {
             id <- Some(peer.string("peer id"))
             ip <- peer.string("ip")
@@ -47,7 +48,8 @@ object TrackerResponse {
   def fromBytes(str: ByteString): Either[TrackerError, TrackerResponse] = {
     val data = BEncode.parse(str.toArray[Byte])
     data match {
-      case Seq(BEncodedDictionary(map)) ⇒
+      case Seq(BEncodedDictionary(values)) ⇒
+        val map = values.toMap
         val error = map.string("failure reason")
         if (error.isDefined) {
           Left(TrackerError(s"Tracker error: ${error.get}"))

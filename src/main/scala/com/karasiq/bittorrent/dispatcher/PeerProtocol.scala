@@ -88,7 +88,7 @@ object PeerProtocol {
   sealed class EmptyMessage(id: Int) {
     def unapply(m: PeerMessage): Option[Int] = {
       Option(m).collect {
-        case PeerMessage(`id`, _) ⇒
+        case PeerMessage(`id`, data) if data.isEmpty ⇒
           id
       }
     }

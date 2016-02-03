@@ -1,9 +1,12 @@
 import akka.actor.{ActorSystem, Props}
 import akka.pattern.ask
+import akka.stream.ActorMaterializer
+import akka.stream.scaladsl.Sink
 import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerRequest, TrackerResponse}
 import com.karasiq.bittorrent.dispatcher._
-import com.karasiq.bittorrent.format.{TorrentMetadata, TorrentPiece}
+import com.karasiq.bittorrent.format.TorrentMetadata
+import com.karasiq.bittorrent.streams.TorrentSource
 import org.apache.commons.io.IOUtils
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Matchers}
 
@@ -12,7 +15,8 @@ import scala.concurrent.duration._
 import scala.language.postfixOps
 
 class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
-  val actorSystem = ActorSystem("torrent-tracker-test")
+  implicit val actorSystem = ActorSystem("torrent-tracker-test")
+  implicit val materializer = ActorMaterializer()
   val tracker = actorSystem.actorOf(Props[HttpTracker])
 
   override protected def afterAll(): Unit = {
@@ -38,8 +42,8 @@ class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
     val loader = actorSystem.actorOf(Props(classOf[PeerDispatcher], torrent))
     result.peers.foreach(p ⇒ loader ! ConnectPeer(p.address, PeerData(null, id, torrent.infoHash)))
     val piece = {
-      val response = loader ? PieceDownloadRequest(0, TorrentPiece.sequence(torrent.files).head)
-      Await.result(response, Duration.Inf).asInstanceOf[DownloadedPiece]
+      val response = TorrentSource.torrent(loader, torrent).take(1).runWith(Sink.head)
+      Await.result(response, Duration.Inf)
     }
     piece.data.length shouldBe torrent.files.pieceLength
   }

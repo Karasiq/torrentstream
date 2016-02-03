@@ -22,7 +22,7 @@ case class BEncodedArray(values: Seq[BEncodedValue]) extends BEncodedValue {
     ByteString("l") ++ values.map(_.toBytes).fold(ByteString.empty)(_ ++ _) ++ ByteString("e")
   }
 }
-case class BEncodedDictionary(values: Map[String, BEncodedValue]) extends BEncodedValue {
+case class BEncodedDictionary(values: Seq[(String, BEncodedValue)]) extends BEncodedValue {
   override def toBytes: ByteString = {
     ByteString("d") ++ values.map(kv ⇒ BEncodedString(kv._1).toBytes ++ kv._2.toBytes).fold(ByteString.empty)(_ ++ _) ++ ByteString("e")
   }
@@ -37,7 +37,7 @@ class BEncode(val input: ParserInput) extends Parser {
 
   def ArrayValue: Rule1[BEncodedArray] = rule { 'l' ~ oneOrMore(Value) ~ 'e' ~> BEncodedArray }
 
-  def DictionaryValue: Rule1[BEncodedDictionary] = rule { 'd' ~ oneOrMore(StringValue ~ Value ~> { (s, v) ⇒ s.string → v }) ~ 'e' ~> ((values: Seq[(String, BEncodedValue)]) ⇒ BEncodedDictionary(values.toMap)) }
+  def DictionaryValue: Rule1[BEncodedDictionary] = rule { 'd' ~ oneOrMore(StringValue ~ Value ~> { (s, v) ⇒ s.string → v }) ~ 'e' ~> BEncodedDictionary }
 
   def Value: Rule1[BEncodedValue] = rule { NumericValue | StringValue | ArrayValue | DictionaryValue }
 
@@ -54,7 +54,7 @@ object BEncodeImplicits {
   implicit class BEncodedValueOps(val value: BEncodedValue) extends AnyVal {
     def asDict: Map[String, BEncodedValue] = value match {
       case BEncodedDictionary(values) ⇒
-        values
+        values.toMap
 
       case _ ⇒
         Map.empty
