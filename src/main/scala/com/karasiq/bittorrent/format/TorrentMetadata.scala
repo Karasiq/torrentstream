@@ -11,7 +11,8 @@ import org.apache.commons.io.IOUtils
 import scala.util.Try
 
 case class TorrentMetadata(infoHash: ByteString, announce: String, announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], files: TorrentFiles) {
-  def size: Long = files.files.map(_.size).sum
+  val size: Long = files.files.map(_.size).sum
+  val pieces: Int = files.pieces.length / 20
 }
 
 case class TorrentFiles(name: String, pieceLength: Long, pieces: ByteString, files: Seq[TorrentFileInfo])

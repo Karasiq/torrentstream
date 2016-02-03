@@ -3,23 +3,20 @@ package com.karasiq.bittorrent.dispatcher
 import java.io.IOException
 import java.net.InetSocketAddress
 
-import akka.actor.{ActorRef, FSM, Stash}
+import akka.actor.{ActorRef, FSM, Stash, Status}
 import akka.io.Tcp._
 import akka.io.{IO, Tcp}
-import akka.stream.OverflowStrategy
 import akka.stream.scaladsl._
+import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
 import com.karasiq.bittorrent.dispatcher.PeerConnectionState._
-import com.karasiq.bittorrent.dispatcher.PeerProtocol.{Msg, PeerHandshake, PieceRequest}
-import com.karasiq.bittorrent.format.{TorrentMetadata, TorrentPiece, TorrentPieceBlock}
+import com.karasiq.bittorrent.dispatcher.PeerProtocol.{Msg, PeerHandshake}
+import com.karasiq.bittorrent.format.{TorrentMetadata, TorrentPieceBlock}
 
-import scala.collection.BitSet
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.{Failure, Success}
 
 case class ConnectPeer(address: InetSocketAddress, ownData: PeerData)
-case class DownloadFinished(index: Int)
 
 sealed trait PeerEvent {
   def data: PeerData
@@ -48,7 +45,7 @@ object PeerConnectionContext {
     def peerData: PeerData
   }
   case class PeerContextHolder(connection: ActorRef, ownData: PeerData, peerData: PeerData) extends PeerContext
-  case class DownloadContext(index: Int, receiver: ActorRef, connection: ActorRef, ownData: PeerData, peerData: PeerData) extends PeerContext
+  case class DownloadContext(block: PieceBlockDownloadRequest, buffer: ByteString, index: Int, receiver: ActorRef, connection: ActorRef, ownData: PeerData, peerData: PeerData) extends PeerContext
 }
 
 class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, PeerConnectionContext] with Stash with ImplicitMaterializer {
@@ -87,23 +84,26 @@ class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, 
   }
 
   def stateMessage: StateFunction = {
-    case Event(Received(Msg(Msg.Choke())), ctx: PeerContext) ⇒
+    case Event(Received(Msg.KeepAlive(_)), ctx: PeerContext) ⇒
+      stay()
+
+    case Event(Received(Msg(Msg.Choke(_))), ctx: PeerContext) ⇒
       log.debug("Choked: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(chokedBy = true))
 
-    case Event(Received(Msg(Msg.Unchoke())), ctx: PeerContext) ⇒
+    case Event(Received(Msg(Msg.Unchoke(_))), ctx: PeerContext) ⇒
       log.debug("Unchoked: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(chokedBy = false))
 
-    case Event(Received(Msg(Msg.Interested())), ctx: PeerContext) ⇒
+    case Event(Received(Msg(Msg.Interested(_))), ctx: PeerContext) ⇒
       log.debug("Interested: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(interestedBy = true))
 
-    case Event(Received(Msg(Msg.NotInterested())), ctx: PeerContext) ⇒
+    case Event(Received(Msg(Msg.NotInterested(_))), ctx: PeerContext) ⇒
       log.debug("Not interested: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(interestedBy = false))
 
-    case Event(Received(Msg(Msg.Have(pieceIndex))), ctx: PeerContext) ⇒
+    case Event(Received(Msg(Msg.Have(pieceIndex))), ctx: PeerContext) if pieceIndex >= 0 && pieceIndex < torrent.pieces  ⇒
       log.debug("Has piece #{}: {}", pieceIndex, ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(completed = ctx.peerData.completed + pieceIndex))
 
@@ -120,43 +120,23 @@ class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, 
     val pf: StateFunction = {
       case Event(Received(Msg.Handshake(PeerHandshake(protocol, infoHash, peerId))), HandshakeContext(connection, peerAddress, ownData)) ⇒
         log.info("Peer handshake finished: {} (id = {})", peerAddress, peerId.utf8String)
-        val newPeerData = PeerData(peerAddress, peerId, infoHash, choking = false, interesting = false, chokedBy = false, interestedBy = false, BitSet.empty)
+        val newPeerData = PeerData(peerAddress, peerId, infoHash)
         context.parent ! PeerConnected(newPeerData)
         stay() using PeerContextHolder(connection, ownData, newPeerData)
 
-      case Event(PieceDownloadRequest(index, piece), ctx: PeerContext) ⇒
-        log.info(s"Downloading piece $index from peer: ${ctx.peerData.address}")
+      case Event(r @ PieceBlockDownloadRequest(index, block @ TorrentPieceBlock(offset, size)), ctx: PeerContext) ⇒
+        val sender = context.sender()
+        log.debug("Downloading piece #{} block {}/{} from peer: {}", index, block.offset, block.size, ctx.peerData.address)
         if (ctx.peerData.chokedBy || !ctx.peerData.completed(index)) {
-          sender() ! PieceDownloadFailed
+          sender ! Status.Failure(new IOException(s"Piece download rejected: $index"))
           stay()
         } else {
-          val self = context.self
-          val sender = context.sender()
-          val blocks = TorrentPiece.blocks(piece, math.pow(2, 14).toLong)
-          val stage = Source.actorRef(100, OverflowStrategy.fail)
-            .transform(() ⇒ new PieceBlockStage(index, torrent.files.pieceLength.toInt))
-            .take(1)
-            .log("downloaded-piece")
-            .to(Sink.onComplete {
-              case Success(result) ⇒
-                sender ! result
-                self ! DownloadFinished(index)
-
-              case Failure(exc) ⇒
-                log.error(exc, "Piece download error: {}", index)
-                sender ! PieceDownloadFailed
-                self ! DownloadFinished(index)
-            })
-            .run()
-          blocks.foreach {
-            case TorrentPieceBlock(offset, size) ⇒
-              ctx.connection ! Write(PieceRequest(index, offset.toInt, size.toInt).toBytes)
-          }
-          goto(Downloading) using DownloadContext(index, stage, ctx.connection, ctx.ownData, ctx.peerData)
+          ctx.connection ! Write(Msg.Request(index, offset.toInt, size.toInt).toBytes)
+          goto(Downloading) using DownloadContext(r, ByteString.empty, index, sender, ctx.connection, ctx.ownData, ctx.peerData)
         }
 
       case Event(_: ConnectionClosed | _: CloseCommand | _: CommandFailed | StateTimeout, ctx: PeerContext) ⇒
-        log.warning(s"Peer disconnected: ${ctx.peerData}")
+        log.warning(s"Peer disconnected: ${ctx.peerData.address}")
         context.parent ! PeerDisconnected(ctx.peerData)
         stop()
     }
@@ -165,25 +145,48 @@ class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, 
 
   when(Downloading, 5 minutes) {
     val pf: StateFunction = {
-      case Event(Received(Msg(Msg.Piece(block))), DownloadContext(index, handler, connection, ownData, peerData)) if block.index == index ⇒
-        handler ! block
-        stay()
-
-      case Event(r @ Received(Msg(Msg.Choke())), DownloadContext(index, handler, connection, ownData, peerData)) ⇒
-        handler ! Failure(new IOException("Peer choked download")) // Download failed
-        self.forward(r)
-        goto(ConnectionEstablished) using PeerContextHolder(connection, ownData, peerData)
-
-      case Event(DownloadFinished(finishedIndex), DownloadContext(index, handler, connection, ownData, peerData)) if index == finishedIndex ⇒
-        goto(ConnectionEstablished) using PeerContextHolder(connection, ownData, peerData)
-
-      case Event(_: PieceDownloadRequest, _) ⇒
+      case Event(_: PieceBlockDownloadRequest, _) ⇒
         stash()
         stay()
 
-      case Event(_: ConnectionClosed | _: CommandFailed | _: CloseCommand | StateTimeout, DownloadContext(index, handler, connection, ownData, peerData)) ⇒
-        handler ! Failure(new IOException("Connection closed or timed out"))
-        log.warning(s"Peer disconnected: $peerData")
+      case Event(Received(Msg(Msg.Piece(block))), ctx @ DownloadContext(request, buffer, index, handler, connection, ownData, peerData)) if block.index == request.index ⇒
+        if (block.data.length > (request.block.size - buffer.length)) {
+          log.debug(s"Block discarded: ${block.offset}/${block.data.length} bytes")
+          stay()
+        } else if (block.data.length == request.block.size - buffer.length) {
+          log.debug("Block finished: {}/{}/{}", index, request.block.offset, request.block.size)
+          handler ! Status.Success(DownloadedBlock(request.index, request.block.offset.toInt, buffer ++ block.data))
+          goto(ConnectionEstablished) using PeerContextHolder(connection, ownData, peerData)
+        } else {
+          stay() using ctx.copy(buffer = buffer ++ block.data)
+        }
+
+      case Event(Received(data), ctx @ DownloadContext(request, buffer, index, handler, connection, ownData, peerData)) if buffer.nonEmpty ⇒
+        if (data.length > (request.block.size - buffer.length)) {
+          log.debug(s"Block discarded: ${request.block.offset}/${data.length} bytes")
+          stay()
+        } else if (data.length == request.block.size - buffer.length) {
+          log.debug("Block finished: {}/{}/{}", index, request.block.offset, request.block.size)
+          handler ! Status.Success(DownloadedBlock(request.index, request.block.offset.toInt, buffer ++ data))
+          goto(ConnectionEstablished) using PeerContextHolder(connection, ownData, peerData)
+        } else {
+          stay() using ctx.copy(buffer = buffer ++ data)
+        }
+
+      case Event(CancelPieceBlockDownload(index, offset, length), ctx: DownloadContext) if ctx.index == index && ctx.block.block.offset == offset && ctx.block.block.size == length ⇒
+        ctx.receiver ! Status.Failure(new IOException("Cancelled"))
+        // log.warning("Block cancelled: {}/{}/{}", index, offset, length)
+        ctx.connection ! Write(Msg.Cancel(index, offset, length).toBytes)
+        goto(ConnectionEstablished) using PeerContextHolder(ctx.connection, ctx.ownData, ctx.peerData)
+
+      case Event(Received(Msg(Msg.Choke(_))), ctx @ DownloadContext(request, buffer, index, handler, connection, ownData, peerData)) ⇒
+        self ! CancelPieceBlockDownload(index, request.block.offset.toInt, request.block.size.toInt)
+        stay()
+
+      case Event(_: ConnectionClosed | _: CommandFailed | _: CloseCommand | StateTimeout, DownloadContext(request, buffer, index, handler, connection, ownData, peerData)) ⇒
+        connection ! Write(Msg.Cancel(request.index, request.block.offset.toInt, request.block.size.toInt).toBytes)
+        handler ! Status.Failure(new IOException("Connection closed or timed out"))
+        log.warning(s"Peer disconnected: ${peerData.address}")
         context.parent ! PeerDisconnected(peerData)
         stop()
     }
@@ -193,5 +196,10 @@ class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, 
   onTransition {
     case Downloading -> ConnectionEstablished ⇒
       unstashAll()
+  }
+
+  whenUnhandled {
+    case _ ⇒
+      stay()
   }
 }

@@ -86,8 +86,11 @@ object PeerProtocol {
   }
 
   sealed class EmptyMessage(id: Int) {
-    def unapplySeq(m: PeerMessage): Option[Seq[Unit]] = {
-      Option(m).filter(_.id == id).map(_ ⇒ Seq())
+    def unapply(m: PeerMessage): Option[Int] = {
+      Option(m).collect {
+        case PeerMessage(`id`, _) ⇒
+          id
+      }
     }
 
     def apply(): PeerMessage = {
@@ -100,10 +103,9 @@ object PeerProtocol {
       Try {
         val buffer = v.toByteBuffer
         val length = buffer.getInt
+        require(length > 0, "Empty message")
         val id = buffer.get().toInt
-        val array = new Array[Byte](length)
-        buffer.get(array)
-        PeerMessage(id, ByteString(array))
+        PeerMessage(id, ByteString(buffer).take(length))
       }.toOption
     }
 
@@ -114,8 +116,8 @@ object PeerProtocol {
     }
 
     object KeepAlive {
-      def unapplySeq(v: ByteString): Option[Seq[Unit]] = {
-        if (v == ByteString(0, 0, 0, 0)) Some(Seq()) else None
+      def unapply(v: ByteString): Option[ByteString] = {
+        if (v == ByteString(0, 0, 0, 0)) Some(v) else None
       }
     }
 
@@ -146,8 +148,8 @@ object PeerProtocol {
       bitSet
     }
 
-    private def writeBitField(values: BitSet): ByteString = {
-      val bitfield = new Array[Byte](values.size)
+    private def writeBitField(size: Int, values: BitSet): ByteString = {
+      val bitfield = new Array[Byte](math.ceil(size.toDouble / 8.0).toInt)
       for (i <- values) {
         bitfield.update(i/8, (bitfield(i/8) | 1 << (7 - (i % 8))).toByte)
       }
@@ -163,8 +165,8 @@ object PeerProtocol {
         }
       }
 
-      def apply(v: BitSet): PeerMessage = {
-        PeerMessage(5, writeBitField(v))
+      def apply(size: Int, v: BitSet): PeerMessage = {
+        PeerMessage(5, writeBitField(size, v))
       }
     }
 
@@ -182,6 +184,10 @@ object PeerProtocol {
           None
         }
       }
+
+      def apply(index: Int, offset: Int, length: Int): PeerMessage = {
+        PeerMessage(6, PieceRequest(index, offset, length).toBytes)
+      }
     }
 
     object Piece {
@@ -191,13 +197,15 @@ object PeerProtocol {
             val buffer = m.payload.toByteBuffer
             val index = buffer.getInt
             val offset = buffer.getInt
-            val array = new Array[Byte](buffer.remaining())
-            buffer.get(array)
-            PieceBlock(index, offset, ByteString(array))
+            PieceBlock(index, offset, ByteString(buffer))
           }.toOption
         } else {
           None
         }
+      }
+
+      def apply(index: Int, offset: Int, data: ByteString): PeerMessage = {
+        PeerMessage(7, PieceBlock(index, offset, data).toBytes)
       }
     }
 
@@ -215,20 +223,25 @@ object PeerProtocol {
           None
         }
       }
+
+      def apply(index: Int, offset: Int, length: Int): PeerMessage = {
+        PeerMessage(8, PieceRequest(index, offset, length).toBytes)
+      }
     }
 
     object Port {
       def unapply(m: PeerMessage): Option[Int] = {
         if (m.id == 9) {
           Try {
-            val buffer = m.payload.toByteBuffer
-            val array = new Array[Byte](2)
-            buffer.get(array)
-            BigInt((ByteString(0, 0) ++ ByteString(array)).toArray).intValue()
+            BigInt((ByteString(0, 0) ++ m.payload.take(2)).toArray).intValue()
           }.toOption
         } else {
           None
         }
+      }
+
+      def apply(port: Int): PeerMessage = {
+        PeerMessage(9, ByteString(BigInt(port).toByteArray).takeRight(2))
       }
     }
   }
