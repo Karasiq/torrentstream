@@ -30,4 +30,12 @@ class BEncodeTest extends FlatSpec with Matchers  {
     pieces.length shouldBe (torrent.files.pieces.length / 20)
     pieces.head.sha1.length shouldBe 20
   }
+
+  "Torrent piece blocks" should "be constructed" in {
+    val data = BEncode.parse(testFile)
+    val torrent = TorrentMetadata.decode(data).get
+    val pieces = TorrentPiece.sequence(torrent.files)
+    val blocks = TorrentPiece.blocks(pieces.head, 10000)
+    blocks.map(_.size).sum shouldBe pieces.head.size
+  }
 }

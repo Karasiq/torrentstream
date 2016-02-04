@@ -11,7 +11,7 @@ import scala.collection.mutable.ArrayBuffer
 
 case class TrackerPeer(peerId: Option[String], address: InetSocketAddress)
 
-case class TrackerResponse(warning: Option[String], interval: Int, minInterval: Option[Int], trackerId: Option[String], complete: Int, incomplete: Int, peers: Seq[TrackerPeer])
+case class TrackerResponse(warning: Option[String], interval: Int, minInterval: Option[Int], trackerId: Option[String], complete: Option[Int], incomplete: Option[Int], peers: Seq[TrackerPeer])
 
 case class TrackerError(reason: String)
 
@@ -57,12 +57,12 @@ object TrackerResponse {
           val response = for {
             warning <- Some(map.string("warning message"))
             interval <- map.number("interval")
-            minInterval <- Some(map.number("min interval"))
+            minInterval <- Some(map.number("min interval").map(_.toInt))
             trackerId <- Some(map.string("tracker id"))
-            complete <- map.number("complete")
-            incomplete <- map.number("incomplete")
+            complete <- Some(map.number("complete").map(_.toInt))
+            incomplete <- Some(map.number("incomplete").map(_.toInt))
             peers <- map.get("peers").collect(parsePeers)
-          } yield TrackerResponse(warning, interval.toInt, minInterval.map(_.toInt), trackerId, complete.toInt, incomplete.toInt, peers)
+          } yield TrackerResponse(warning, interval.toInt, minInterval, trackerId, complete, incomplete, peers)
 
           response.fold[Either[TrackerError, TrackerResponse]](Left(TrackerError("Invalid response")))(Right.apply)
         }

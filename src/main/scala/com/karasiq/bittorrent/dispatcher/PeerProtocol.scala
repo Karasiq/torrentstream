@@ -3,16 +3,24 @@ package com.karasiq.bittorrent.dispatcher
 import java.nio.ByteBuffer
 
 import akka.util.ByteString
-import org.parboiled2._
 
 import scala.collection.{BitSet, mutable}
+import scala.language.implicitConversions
 import scala.util.Try
 
 /**
   * @see [[https://wiki.theory.org/BitTorrentSpecification#Peer_wire_protocol_.28TCP.29]]
   */
 object PeerProtocol {
-  case class PeerHandshake(protocol: String, infoHash: ByteString, peerId: ByteString) {
+  trait ToBytes {
+    def toBytes: ByteString
+  }
+
+  implicit def toBytesTraitToByteString(t: ToBytes): ByteString = {
+    t.toBytes
+  }
+
+  case class PeerHandshake(protocol: String, infoHash: ByteString, peerId: ByteString) extends ToBytes {
     require(infoHash.length == 20)
     require(peerId.length == 20)
 
@@ -30,8 +38,9 @@ object PeerProtocol {
     }
   }
 
-  case class PeerMessage(id: Int, payload: ByteString) {
+  case class PeerMessage(id: Int, length: Int, payload: ByteString) extends ToBytes {
     def toBytes: ByteString = {
+      require(length == payload.length + 1)
       val byteBuffer = ByteBuffer.allocate(4 + 1 + payload.length)
       byteBuffer.putInt(payload.length + 1)
       byteBuffer.put(id.toByte)
@@ -41,7 +50,13 @@ object PeerProtocol {
     }
   }
 
-  case class PieceRequest(index: Int, offset: Int, length: Int) {
+  object PeerMessage {
+    def apply(id: Int, payload: ByteString): PeerMessage = {
+      PeerMessage(id, payload.length + 1, payload)
+    }
+  }
+
+  case class PieceRequest(index: Int, offset: Int, length: Int) extends ToBytes {
     def toBytes: ByteString = {
       val byteBuffer = ByteBuffer.allocate(4 * 3)
       byteBuffer.putInt(index)
@@ -52,7 +67,7 @@ object PeerProtocol {
     }
   }
 
-  case class PieceBlock(index: Int, offset: Int, data: ByteString) {
+  case class PieceBlock(index: Int, offset: Int, data: ByteString) extends ToBytes {
     def toBytes: ByteString = {
       val byteBuffer = ByteBuffer.allocate(4 * 2 + data.length)
       byteBuffer.putInt(index)
@@ -63,32 +78,10 @@ object PeerProtocol {
     }
   }
 
-  class Reader(val input: ParserInput) extends Parser {
-    def ByteNumber: Rule1[Int] = rule { capture(CharPredicate.All) ~>
-      { (v: String) ⇒ v.toCharArray.apply(0).toInt }
-    }
-
-    def ByteFrame(length: Int): Rule1[ByteString] = rule { capture(20.times(CharPredicate.All)) ~>
-      { (v: String) ⇒ ByteString(v.toCharArray.map(_.toByte)) }
-    }
-
-    def SizedString: Rule1[String] = rule { ByteNumber ~>
-      { (length: Int) ⇒ capture(length.times(CharPredicate.All)) }
-    }
-
-    def Handshake: Rule1[PeerHandshake] = rule { SizedString ~ 8.times(CharPredicate.All) ~ ByteFrame(20) ~ ByteFrame(20) ~> PeerHandshake }
-
-    def FourByteNumber: Rule1[Int] = rule { ByteFrame(4) ~>
-      { (b: ByteString) ⇒ b.toByteBuffer.getInt }
-    }
-
-    def KeepAlive: Rule0 = rule { FourByteNumber ~> ((i: Int) ⇒ test(i == 0)) }
-  }
-
   sealed class EmptyMessage(id: Int) {
     def unapply(m: PeerMessage): Option[Int] = {
       Option(m).collect {
-        case PeerMessage(`id`, data) if data.isEmpty ⇒
+        case PeerMessage(`id`, length, data) if data.isEmpty ⇒
           id
       }
     }
@@ -103,21 +96,37 @@ object PeerProtocol {
       Try {
         val buffer = v.toByteBuffer
         val length = buffer.getInt
-        require(length > 0, "Empty message")
+        require(length > 0 && buffer.remaining() > 0, "Empty message")
         val id = buffer.get().toInt
-        PeerMessage(id, ByteString(buffer).take(length))
+        PeerMessage(id, length, ByteString(buffer).take(length - 1))
       }.toOption
     }
 
     object Handshake {
       def unapply(v: ByteString): Option[PeerHandshake] = {
-        new Reader(v.toArray[Byte]).Handshake.run().toOption
+        Try {
+          val buffer = v.toByteBuffer
+          val length = buffer.get().toInt
+          assert(length == buffer.remaining() - 48)
+          val protocol = new Array[Byte](length)
+          buffer.get(protocol)
+          buffer.position(buffer.position() + 8)
+          val infoHash = new Array[Byte](20)
+          buffer.get(infoHash)
+          val id = new Array[Byte](20)
+          buffer.get(id)
+          PeerHandshake(new String(protocol, "ASCII"), ByteString(infoHash), ByteString(id))
+        }.toOption
       }
     }
 
     object KeepAlive {
       def unapply(v: ByteString): Option[ByteString] = {
-        if (v == ByteString(0, 0, 0, 0)) Some(v) else None
+        if (v == this.apply()) Some(v) else None
+      }
+
+      def apply(): ByteString = {
+        ByteString(0, 0, 0, 0)
       }
     }
 
@@ -127,15 +136,23 @@ object PeerProtocol {
     object NotInterested extends EmptyMessage(3)
     object Have {
       def unapply(m: PeerMessage): Option[Int] = {
-        if (m.id == 4) {
-          Try(BigInt(m.payload.toArray[Byte]).intValue()).toOption
+        if (m.id == 4 && m.length == 5) {
+          Try {
+            val buffer = m.payload.asByteBuffer
+            buffer.getInt
+          }.toOption
         } else {
           None
         }
       }
 
       def apply(v: Int): PeerMessage = {
-        PeerMessage(4, ByteString(BigInt(v).toByteArray))
+        val buffer = ByteBuffer.allocate(4)
+        buffer.putInt(v)
+        buffer.flip()
+        val bytes = ByteString(buffer)
+        require(bytes.length == 4)
+        PeerMessage(4, bytes)
       }
     }
 
@@ -172,7 +189,7 @@ object PeerProtocol {
 
     object Request {
       def unapply(m: PeerMessage): Option[PieceRequest] = {
-        if (m.id == 6) {
+        if (m.id == 6 && m.length == 13) {
           Try {
             val buffer = m.payload.toByteBuffer
             val index = buffer.getInt
@@ -241,7 +258,10 @@ object PeerProtocol {
       }
 
       def apply(port: Int): PeerMessage = {
-        PeerMessage(9, ByteString(BigInt(port).toByteArray).takeRight(2))
+        val buffer = ByteBuffer.allocate(2)
+        buffer.putShort(port.toShort)
+        buffer.flip()
+        PeerMessage(9, ByteString(buffer))
       }
     }
   }

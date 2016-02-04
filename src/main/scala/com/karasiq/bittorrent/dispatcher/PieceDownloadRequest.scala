@@ -12,3 +12,5 @@ case class PieceBlockDownloadRequest(index: Int, block: TorrentPieceBlock)
 case class DownloadedBlock(index: Int, offset: Int, data: ByteString)
 
 case class CancelPieceBlockDownload(index: Int, offset: Int, length: Int)
+
+case class PieceBlockDownloadFailed(index: Int, offset: Int, length: Int)

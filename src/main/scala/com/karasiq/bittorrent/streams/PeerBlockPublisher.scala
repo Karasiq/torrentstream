@@ -1,62 +1,109 @@
 package com.karasiq.bittorrent.streams
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Status}
+import akka.actor._
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import com.karasiq.bittorrent.dispatcher._
+import com.karasiq.bittorrent.format.TorrentPieceBlock
 
-import scala.concurrent.duration._
+import scala.annotation.tailrec
+import scala.collection.mutable
 import scala.language.postfixOps
-import scala.util.Random
 
-class PeerBlockPublisher(request: PieceBlockDownloadRequest, peerDispatcher: ActorRef) extends Actor with ActorPublisher[DownloadedBlock] with ActorLogging {
-  import context.dispatcher
-  private val requests = context.system.settings.config.getInt("karasiq.torrentstream.peer-load-balancer.requests-per-block")
-  private var block: Option[DownloadedBlock] = None
-  private var peersRequested = Set.empty[ActorRef]
+class PeerBlockPublisher(peerDispatcher: ActorRef, pieceSize: Int) extends Actor with ActorPublisher[DownloadedBlock] with ActorLogging with Stash {
+  private val peersRequired = context.system.settings.config.getInt("karasiq.torrentstream.peer-load-balancer.peers-per-piece")
+  private var requested = Map.empty[ActorRef, Set[PieceBlockDownloadRequest]].withDefaultValue(Set.empty)
+  private var buffer = Vector.empty[DownloadedBlock]
+  private val peerSet = mutable.Set.empty[ActorRef]
+  private val demand = mutable.Map.empty[ActorRef, Int].withDefaultValue(0)
+  private var awaitingPeer: Boolean = false
+  private var currentOffset = 0
 
-  private def publish(): Unit = {
+  override def postStop(): Unit = {
+    for ((peer, requests) <- requested; PieceBlockDownloadRequest(index, TorrentPieceBlock(offset, size)) <- requests) {
+      peer ! CancelPieceBlockDownload(index, offset.toInt, size.toInt)
+    }
+    super.postStop()
+  }
+
+  @tailrec
+  private def deliverBuffer(): Unit = {
     if (totalDemand > 0) {
-      onNext(block.get)
-      onCompleteThenStop()
+      val (use, keep) = buffer.partition(_.offset == currentOffset)
+      if (use.nonEmpty) {
+        buffer = keep
+        onNext(use.head)
+        currentOffset += use.head.data.length
+        if (currentOffset == pieceSize) {
+          onCompleteThenStop()
+        } else {
+          deliverBuffer()
+        }
+      }
     }
   }
 
-  private def cancel(): Unit = {
-    peersRequested.foreach(_ ! CancelPieceBlockDownload(request.index, request.block.offset.toInt, request.block.size.toInt))
+  private def deliver(chunk: DownloadedBlock): Unit = {
+    if (chunk.offset >= currentOffset) {
+      if (buffer.length < 200) {
+        buffer :+= chunk
+      } else {
+        // Overflow
+        buffer = buffer.drop(1) :+ chunk
+      }
+    }
+    deliverBuffer()
   }
 
   override def receive: Receive = {
-    case request: PieceBlockDownloadRequest if block.isEmpty && peersRequested.size < requests ⇒
-      peerDispatcher ! RequestPeers(request.index)
-
-    case PeerList(list) if block.isEmpty && peersRequested.size < requests ⇒
-      val peers = list.filterNot(peersRequested.contains)
-      log.debug("Requesting block: {}", request.block)
-      val peerSelection = Random.shuffle(peers).take(requests / 2)
-      peersRequested ++= peerSelection
-      peerSelection.foreach(_ ! request)
-
-    case Request(_) ⇒
-      if (block.isDefined) {
-        publish()
-      } else {
-        self ! request
+    case request @ PieceBlockDownloadRequest(index, TorrentPieceBlock(offset, size)) ⇒
+      if (peerSet.size < peersRequired && !awaitingPeer) {
+        peerDispatcher ! RequestPeers(index, peersRequired)
+        awaitingPeer = true
       }
 
+      if (peerSet.isEmpty) {
+        stash()
+      } else if (!requested.values.exists(_.contains(request))) {
+        log.debug("Retrying block: {}/{}/{}", index, offset, size)
+        val peer = peerSet.minBy(demand)
+        peer ! request
+        demand += peer → (demand(peer) + 1)
+        requested += peer → (requested(peer) + request)
+      }
+
+    case PeerList(peers) ⇒
+      val newPeers = peers.filterNot(peerSet)
+      peerSet ++= newPeers
+      newPeers.foreach(context.watch)
+      awaitingPeer = false
+      unstashAll()
+
+    case Request(_) ⇒
+      deliverBuffer()
+
     case Cancel ⇒
-      cancel()
       context.stop(self)
 
-    case Status.Failure(_) if this.block.isEmpty ⇒
-      peersRequested -= sender()
-      context.system.scheduler.scheduleOnce(5 seconds, self, request)
+    case PieceBlockDownloadFailed(index, offset, length) ⇒
+      val peer = context.sender()
+      peerSet -= peer
+      val (drop, keep) = requested(peer).partition(r ⇒ r.index == index && r.block.offset.toInt == offset)
+      if (drop.nonEmpty) {
+        requested += peer → keep
+        self ! drop.head
+      }
 
-    case Status.Success(data: DownloadedBlock) if this.block.isEmpty ⇒
-      peersRequested -= sender()
-      log.info("Block published: {}", this.request.block)
-      cancel()
-      this.block = Some(data)
-      publish()
+    case block @ DownloadedBlock(index, offset, data) ⇒
+      val peer = context.sender()
+      demand += peer → (demand(peer) - 1)
+      log.debug("Block published: {}/{}/{}", index, offset, data.length)
+      requested += peer → requested(peer).filterNot(r ⇒ r.index == index && r.block.offset == offset && r.block.size == data.length)
+      deliver(block)
+
+    case Terminated(peer) ⇒
+      requested(peer).foreach(self ! _)
+      requested -= peer
+      peerSet -= peer
   }
 }
