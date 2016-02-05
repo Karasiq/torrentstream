@@ -15,7 +15,7 @@ case class TorrentMetadata(infoHash: ByteString, announce: String, announceList:
   val pieces: Int = files.pieces.length / 20
 }
 
-case class TorrentFiles(name: String, pieceLength: Long, pieces: ByteString, files: Seq[TorrentFileInfo])
+case class TorrentFiles(name: String, pieceLength: Int, pieces: ByteString, files: Seq[TorrentFileInfo])
 case class TorrentFileInfo(name: String, size: Long)
 
 object TorrentMetadata {
@@ -55,7 +55,7 @@ object TorrentMetadata {
       if (files.isDefined) {
         for {
           name <- name
-          pieceLength <- pieceLength
+          pieceLength <- pieceLength.map(_.toInt)
           pieces <- pieces
           files <- files
         } yield TorrentFiles(name, pieceLength, pieces, files)
@@ -63,7 +63,7 @@ object TorrentMetadata {
         for {
           name <- name
           length <- length
-          pieceLength <- pieceLength
+          pieceLength <- pieceLength.map(_.toInt)
           pieces <- pieces
         } yield TorrentFiles(name, pieceLength, pieces, Seq(TorrentFileInfo(name, length)))
       }

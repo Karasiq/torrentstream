@@ -5,8 +5,8 @@ import akka.util.ByteString
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 
-case class TorrentPiece(size: Long, sha1: ByteString, file: TorrentFileInfo)
-case class TorrentPieceBlock(offset: Long, size: Long)
+case class TorrentPiece(size: Int, sha1: ByteString, file: TorrentFileInfo)
+case class TorrentPieceBlock(offset: Int, size: Int)
 
 object TorrentPiece {
   def sequence(files: TorrentFiles): IndexedSeq[TorrentPiece] = {
@@ -29,9 +29,9 @@ object TorrentPiece {
     pieceSequenceRec(new ArrayBuffer[TorrentPiece](files.pieces.length / 20), 0L, 0L, 0, files.files)
   }
 
-  def blocks(piece: TorrentPiece, sizeLimit: Long): IndexedSeq[TorrentPieceBlock] = {
+  def blocks(piece: TorrentPiece, sizeLimit: Int): IndexedSeq[TorrentPieceBlock] = {
     @tailrec
-    def pieceBlockRec(buffer: ArrayBuffer[TorrentPieceBlock], offset: Long): IndexedSeq[TorrentPieceBlock] = {
+    def pieceBlockRec(buffer: ArrayBuffer[TorrentPieceBlock], offset: Int): IndexedSeq[TorrentPieceBlock] = {
       if (offset >= piece.size) {
         buffer.result()
       } else {
@@ -39,6 +39,6 @@ object TorrentPiece {
         pieceBlockRec(buffer :+ block, offset + block.size)
       }
     }
-    pieceBlockRec(new ArrayBuffer[TorrentPieceBlock]((piece.size / sizeLimit + 1).toInt), 0L)
+    pieceBlockRec(new ArrayBuffer[TorrentPieceBlock](piece.size / sizeLimit + 1), 0)
   }
 }

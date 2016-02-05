@@ -7,11 +7,10 @@ import akka.io.Tcp.Close
 import akka.stream.scaladsl._
 import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
+import com.karasiq.bittorrent.dispatcher.PeerProtocol.PieceBlockRequest
 import com.karasiq.bittorrent.format.TorrentMetadata
-import com.karasiq.bittorrent.streams.PeerPiecePublisher
-import org.apache.commons.codec.binary.Hex
 
-import scala.collection.mutable
+import scala.collection.{BitSet, mutable}
 import scala.concurrent.duration._
 import scala.language.postfixOps
 import scala.util.Random
@@ -19,7 +18,7 @@ import scala.util.Random
 case class RequestPeers(piece: Int, count: Int)
 case class PeerList(peers: Seq[ActorRef])
 case class BanPeer(peer: ActorRef)
-case class HasPiece(piece: Int)
+case class UpdateBitField(completed: BitSet)
 
 class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.dispatcher
@@ -35,6 +34,8 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
 
   private var ownData = PeerData(new InetSocketAddress(InetAddress.getLocalHost, 8902), peerId, torrent.infoHash)
 
+  private var pieces = Vector.empty[DownloadedPiece]
+
   @throws[Exception](classOf[Exception])
   override def preStart(): Unit = {
     super.preStart()
@@ -43,24 +44,24 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
   }
 
   override def receive: Receive = {
-    case r: TrackerRequest ⇒
+    case request: TrackerRequest ⇒
       import akka.pattern.ask
       import context.system
       implicit val timeout = Timeout(30 seconds)
-      log.info("Announce request: {}", r.announce)
-      (announcer ? r).foreach {
+      log.info("Announce request: {}", request.announce)
+      (announcer ? request).foreach {
         case TrackerError(error) ⇒
           log.error("Tracker error: {}", error)
-          system.scheduler.scheduleOnce(1 minute, self, r)
+          system.scheduler.scheduleOnce(1 minute, self, request)
 
         case TrackerResponse(_, interval, minInterval, trackerId, _, _, peerList) ⇒
           val next = 2.minutes // minInterval.getOrElse(interval).seconds
-          log.info("{} peers received from tracker: {}, next request in {}", peerList.length, r.announce, next)
-          system.scheduler.scheduleOnce(next, self, r.copy(trackerId = trackerId))
+          log.info("{} peers received from tracker: {}, next request in {}", peerList.length, request.announce, next)
+          system.scheduler.scheduleOnce(next, self, request.copy(trackerId = trackerId))
           peerList.foreach(peer ⇒ self ! ConnectPeer(peer.address, null))
       }
 
-    case r @ RequestPeers(index, count) if (0 until torrent.pieces).contains(index) ⇒
+    case request @ RequestPeers(index, count) if (0 until torrent.pieces).contains(index) ⇒
       val result = peers.collect {
         case (peer, data) if data.completed(index) && !data.chokedBy ⇒
           peer
@@ -74,29 +75,42 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
         val sender = context.sender()
         context.system.scheduler.scheduleOnce(5 seconds) {
           // Retry
-          self.tell(r, sender)
+          self.tell(request, sender)
         }
       }
-
-    case request @ PieceDownloadRequest(index, piece) if (0 until torrent.pieces).contains(index) ⇒
-      val sender = context.sender()
-      if (log.isInfoEnabled) {
-        log.info("Piece download request: {} with hash {}", index, Hex.encodeHexString(piece.sha1.toArray))
-      }
-      Source.actorPublisher[DownloadedPiece](Props(classOf[PeerPiecePublisher], request, self))
-        .completionTimeout(5 minutes)
-        .runWith(Sink.foreach(sender ! _))
 
     case BanPeer(peer) if peers.contains(peer) ⇒
       val address = peers(peer).address
       banned += address
+      peers -= peer
       log.warning("Peer banned: {}", address)
       peer ! Close
 
-    case h @ HasPiece(piece) ⇒
-      ownData = ownData.copy(completed = ownData.completed + piece)
-      log.info("Has piece: {}", h.piece)
-      peers.keys.foreach(_ ! h)
+    case piece @ DownloadedPiece(index, data) ⇒
+      val completed = if (pieces.length > 100) {
+        val (drop, keep) = pieces.splitAt(1)
+        pieces = keep :+ piece
+        ownData.completed + index -- drop.map(_.pieceIndex)
+      } else {
+        pieces :+= piece
+        ownData.completed + index
+      }
+      this.ownData = ownData.copy(completed = completed)
+      log.info("Piece buffered: #{}", index)
+      peers.keys.foreach(_ ! UpdateBitField(completed))
+
+    case PieceBlockRequest(index, offset, length) ⇒
+      pieces.find(p ⇒ p.pieceIndex == index && p.data.length >= (offset + length)) match {
+        case Some(DownloadedPiece(`index`, data)) ⇒
+          log.info("Block uploaded: {}/{}/{}", index, offset, length)
+          val block = DownloadedBlock(index, offset, data.slice(offset, offset + length))
+          require(block.data.length == length)
+          sender() ! block
+
+        case _ ⇒
+          log.warning("Missing block request: {}/{}/{}", index, offset, length)
+          sender() ! BlockDownloadFailed(index, offset, length)
+      }
 
     case c @ ConnectPeer(address, data) if !banned.contains(address) && !peers.exists(_._2.address == address) ⇒
       log.info("Connecting to: {}", address)

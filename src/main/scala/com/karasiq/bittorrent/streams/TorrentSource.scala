@@ -3,6 +3,7 @@ package com.karasiq.bittorrent.streams
 import akka.actor.{ActorRef, Props}
 import akka.stream.scaladsl.Source
 import akka.util.ByteString
+import com.karasiq.bittorrent.dispatcher.PeerProtocol.PieceBlockRequest
 import com.karasiq.bittorrent.dispatcher._
 import com.karasiq.bittorrent.format.{TorrentFileInfo, TorrentMetadata, TorrentPiece}
 
@@ -11,10 +12,10 @@ import scala.language.postfixOps
 object TorrentSource {
   def pieceBlocks(peerDispatcher: ActorRef, index: Int, piece: TorrentPiece, blockSize: Int): Source[ByteString, _] = {
     val blocks = TorrentPiece.blocks(piece, blockSize).toVector
-    val size = blocks.map(_.size).sum.toInt
+    val size = blocks.map(_.size).sum
     Source
       .actorPublisher[DownloadedBlock](Props(classOf[PeerBlockPublisher], peerDispatcher, size))
-      .mapMaterializedValue(loader ⇒ blocks.foreach(block ⇒ loader ! PieceBlockDownloadRequest(index, block)))
+      .mapMaterializedValue(loader ⇒ blocks.foreach(block ⇒ loader ! PieceBlockRequest(index, block.offset, block.size)))
       .fold(ByteString.empty)((bs, block) ⇒ bs ++ block.data)
   }
 

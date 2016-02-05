@@ -50,7 +50,7 @@ class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef
     case piece @ DownloadedPiece(index, data) if this.piece.isEmpty ⇒
       if (checkHash(data, request.piece.sha1)) {
         log.info("Piece finished #{}", index)
-        peerDispatcher ! HasPiece(index)
+        peerDispatcher ! piece
         this.piece = Some(piece)
         publish()
       } else {

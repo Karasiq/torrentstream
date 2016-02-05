@@ -56,7 +56,7 @@ object PeerProtocol {
     }
   }
 
-  case class PieceRequest(index: Int, offset: Int, length: Int) extends ToBytes {
+  case class PieceBlockRequest(index: Int, offset: Int, length: Int) extends ToBytes {
     def toBytes: ByteString = {
       val byteBuffer = ByteBuffer.allocate(4 * 3)
       byteBuffer.putInt(index)
@@ -188,14 +188,14 @@ object PeerProtocol {
     }
 
     object Request {
-      def unapply(m: PeerMessage): Option[PieceRequest] = {
+      def unapply(m: PeerMessage): Option[PieceBlockRequest] = {
         if (m.id == 6 && m.length == 13) {
           Try {
             val buffer = m.payload.toByteBuffer
             val index = buffer.getInt
             val offset = buffer.getInt
             val length = buffer.getInt
-            PieceRequest(index, offset, length)
+            PieceBlockRequest(index, offset, length)
           }.toOption
         } else {
           None
@@ -203,7 +203,7 @@ object PeerProtocol {
       }
 
       def apply(index: Int, offset: Int, length: Int): PeerMessage = {
-        PeerMessage(6, PieceRequest(index, offset, length).toBytes)
+        PeerMessage(6, PieceBlockRequest(index, offset, length).toBytes)
       }
     }
 
@@ -227,14 +227,14 @@ object PeerProtocol {
     }
 
     object Cancel {
-      def unapply(m: PeerMessage): Option[PieceRequest] = {
+      def unapply(m: PeerMessage): Option[PieceBlockRequest] = {
         if (m.id == 8) {
           Try {
             val buffer = m.payload.toByteBuffer
             val index = buffer.getInt
             val offset = buffer.getInt
             val length = buffer.getInt
-            PieceRequest(index, offset, length)
+            PieceBlockRequest(index, offset, length)
           }.toOption
         } else {
           None
@@ -242,7 +242,7 @@ object PeerProtocol {
       }
 
       def apply(index: Int, offset: Int, length: Int): PeerMessage = {
-        PeerMessage(8, PieceRequest(index, offset, length).toBytes)
+        PeerMessage(8, PieceBlockRequest(index, offset, length).toBytes)
       }
     }
 
