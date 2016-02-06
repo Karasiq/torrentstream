@@ -207,7 +207,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
         val (drop, keep) = queue.partition(q ⇒ q.index == index && q.offset == offset && q.length == length)
         drop.foreach(_.handler ! BlockDownloadFailed(index, offset, length))
         if (drop.exists(_.pipelined)) {
-          pushMessage(Msg.Cancel(index, offset, length))
+          cancelDownload(ctx, drop.head)
         }
         download(ctx, keep)
 
@@ -225,9 +225,9 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
       case Event(StateTimeout, ctx @ PeerContext(queue, _, ownData, peerData)) ⇒
         if (queue.nonEmpty) {
           queue.foreach {
-            case QueuedDownload(pipelined, index, offset, length, handler) ⇒
+            case dl @ QueuedDownload(pipelined, index, offset, length, handler) ⇒
               if (pipelined) {
-                pushMessage(Msg.Cancel(index, offset, length))
+                cancelDownload(ctx, dl)
               }
               log.debug("Block download failed: read timeout ({}/{}/{})", index, offset, length)
               handler ! BlockDownloadFailed(index, offset, length)
@@ -281,6 +281,21 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
   private def updateState(ctx: PeerContext, newPeerData: PeerData): State = {
     peerDispatcher ! PeerStateChanged(newPeerData)
     stay() using ctx.copy(peerData = newPeerData)
+  }
+
+  private def cancelDownload(ctx: PeerContext, download: QueuedDownload): Unit = {
+    val (drop, keep) = messageBuffer.partition {
+      case Msg.Request(PieceBlockRequest(index, offset, length)) if index == download.index && offset == download.offset && length == download.length ⇒
+        true
+
+      case _ ⇒
+        false
+    }
+    if (drop.nonEmpty) {
+      messageBuffer = keep
+    } else {
+      pushMessage(Msg.Cancel(download.index, download.offset, download.length))
+    }
   }
 
   private def download(ctx: PeerContext, queue: List[QueuedDownload]): State = {

@@ -1,4 +1,3 @@
-import java.io.FileOutputStream
 import java.time.Instant
 
 import com.karasiq.bittorrent.format.{BEncode, TorrentFileInfo, TorrentMetadata, TorrentPiece}
@@ -7,11 +6,10 @@ import org.apache.commons.io.IOUtils
 import org.scalatest.{FlatSpec, Matchers}
 
 class BEncodeTest extends FlatSpec with Matchers  {
-  val testFile = IOUtils.toByteArray(getClass.getResourceAsStream("ubuntu-15.10-desktop-amd64.iso.torrent"))
+  val testFile = IOUtils.toByteArray(getClass.getResource("ubuntu-15.10-desktop-amd64.iso.torrent"))
 
   "BEncode parser" should "parse torrent file" in {
     val data = BEncode.parse(testFile)
-    IOUtils.write(data.head.toBytes.toArray, new FileOutputStream("test.torrent"))
     val torrent = TorrentMetadata.decode(data).get
     Hex.encodeHexString(torrent.infoHash.toArray).toUpperCase shouldBe "3F19B149F53A50E14FC0B79926A391896EABAB6F"
     torrent.announce shouldBe "http://torrent.ubuntu.com:6969/announce"
