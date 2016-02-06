@@ -12,15 +12,15 @@ import scala.util.Try
   * @see [[https://wiki.theory.org/BitTorrentSpecification#Peer_wire_protocol_.28TCP.29]]
   */
 object PeerProtocol {
-  trait ToBytes {
+  trait PeerTcpMessage {
     def toBytes: ByteString
   }
 
-  implicit def toBytesTraitToByteString(t: ToBytes): ByteString = {
+  implicit def toBytesTraitToByteString(t: PeerTcpMessage): ByteString = {
     t.toBytes
   }
 
-  case class PeerHandshake(protocol: String, infoHash: ByteString, peerId: ByteString) extends ToBytes {
+  case class PeerHandshake(protocol: String, infoHash: ByteString, peerId: ByteString) extends PeerTcpMessage {
     require(infoHash.length == 20)
     require(peerId.length == 20)
 
@@ -38,7 +38,7 @@ object PeerProtocol {
     }
   }
 
-  case class PeerMessage(id: Int, length: Int, payload: ByteString) extends ToBytes {
+  case class PeerMessage(id: Int, length: Int, payload: ByteString) extends PeerTcpMessage {
     def toBytes: ByteString = {
       require(length == payload.length + 1)
       val byteBuffer = ByteBuffer.allocate(4 + 1 + payload.length)
@@ -56,7 +56,7 @@ object PeerProtocol {
     }
   }
 
-  case class PieceBlockRequest(index: Int, offset: Int, length: Int) extends ToBytes {
+  case class PieceBlockRequest(index: Int, offset: Int, length: Int) extends PeerTcpMessage {
     def toBytes: ByteString = {
       val byteBuffer = ByteBuffer.allocate(4 * 3)
       byteBuffer.putInt(index)
@@ -67,7 +67,7 @@ object PeerProtocol {
     }
   }
 
-  case class PieceBlock(index: Int, offset: Int, data: ByteString) extends ToBytes {
+  case class PieceBlock(index: Int, offset: Int, data: ByteString) extends PeerTcpMessage {
     def toBytes: ByteString = {
       val byteBuffer = ByteBuffer.allocate(4 * 2 + data.length)
       byteBuffer.putInt(index)

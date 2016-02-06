@@ -19,9 +19,10 @@ object TorrentPiece {
         pieceSequenceRec(buffer, offset, 0L, pieceIndex, fs)
 
       case fs @ Seq(currentFile, _*) if offset < totalSize ⇒
+        val length = Seq(files.pieceLength, (totalSize - offset).toInt).min
         val sha1 = files.pieces.slice(pieceIndex * 20, (pieceIndex * 20) + 20)
-        val piece = TorrentPiece(files.pieceLength, sha1, currentFile)
-        pieceSequenceRec(buffer :+ piece, offset + files.pieceLength, fileOffset + files.pieceLength, pieceIndex + 1, fs)
+        val piece = TorrentPiece(length, sha1, currentFile)
+        pieceSequenceRec(buffer :+ piece, offset + length, fileOffset + length, pieceIndex + 1, fs)
 
       case other ⇒
         buffer.result()

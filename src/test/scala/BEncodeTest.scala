@@ -28,6 +28,7 @@ class BEncodeTest extends FlatSpec with Matchers  {
     val torrent = TorrentMetadata.decode(data).get
     val pieces = TorrentPiece.sequence(torrent.files)
     pieces.length shouldBe (torrent.files.pieces.length / 20)
+    pieces.map(_.size).sum shouldBe torrent.size
     pieces.head.sha1.length shouldBe 20
   }
 

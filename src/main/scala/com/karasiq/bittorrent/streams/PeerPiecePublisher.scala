@@ -43,7 +43,7 @@ class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef
 
           case Failure(_) ⇒
             log.warning("Retrying piece #{}", request.index)
-            context.system.scheduler.scheduleOnce(100 millis, self, request)
+            context.system.scheduler.scheduleOnce(3 seconds, self, request)
         })
         .runWith(Sink.foreach(data ⇒ self ! DownloadedPiece(request.index, data)))
 

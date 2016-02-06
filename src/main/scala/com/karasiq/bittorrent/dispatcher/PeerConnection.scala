@@ -4,7 +4,8 @@ import java.net.InetSocketAddress
 
 import akka.actor.{ActorRef, FSM}
 import akka.io.Tcp._
-import akka.io.{IO, Tcp}
+import akka.stream.actor.ActorPublisher
+import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
@@ -15,8 +16,6 @@ import com.karasiq.bittorrent.format.TorrentMetadata
 import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.language.postfixOps
-
-case class ConnectPeer(address: InetSocketAddress, ownData: PeerData)
 
 sealed trait PeerEvent {
   def data: PeerData
@@ -35,16 +34,14 @@ object PeerConnectionState {
 
 sealed trait PeerConnectionContext
 object PeerConnectionContext {
-  case object NoData extends PeerConnectionContext
-  case class ConnectingContext(ownData: PeerData) extends PeerConnectionContext
-  case class HandshakeContext(connection: ActorRef, address: InetSocketAddress, ownData: PeerData) extends PeerConnectionContext
+  case class HandshakeContext(address: InetSocketAddress, ownData: PeerData) extends PeerConnectionContext
 
-  case class QueuedDownload(pipelined: Boolean, blockSize: Int, block: PieceBlock, handler: ActorRef)
+  case class QueuedDownload(pipelined: Boolean, index: Int, offset: Int, length: Int, handler: ActorRef)
   case class QueuedUpload(index: Int, offset: Int, length: Int, data: ByteString = ByteString.empty)
-  case class PeerContext(downloadQueue: List[QueuedDownload], uploadQueue: List[QueuedUpload], connection: ActorRef, ownData: PeerData, peerData: PeerData) extends PeerConnectionContext
+  case class PeerContext(downloadQueue: List[QueuedDownload], uploadQueue: List[QueuedUpload], ownData: PeerData, peerData: PeerData) extends PeerConnectionContext
 }
 
-class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, PeerConnectionContext] with ImplicitMaterializer {
+class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAddress: InetSocketAddress, initData: PeerData) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with ImplicitMaterializer {
   import context.system
 
   // Settings
@@ -52,77 +49,24 @@ class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, 
   private val downloadQueueLimit = config.getInt("download-queue-size")
   private val uploadQueueLimit = config.getInt("upload-queue-size")
 
-  startWith(Idle, NoData)
+  private var messageBuffer = Vector.empty[PeerTcpMessage]
 
-  when(Idle, 2 seconds) {
-    case Event(ConnectPeer(address, ownData), _) ⇒
-      IO(Tcp) ! Connect(address)
-      goto(Connecting) using ConnectingContext(ownData)
-
-    case Event(StateTimeout, _) ⇒
-      stop()
-  }
-
-  when(Connecting, 10 seconds) {
-    case Event(Connected(remote, local), ConnectingContext(ownData)) ⇒
-      val connection = sender()
-      connection ! Register(self)
-      connection ! Write(PeerHandshake("BitTorrent protocol", ownData.infoHash, ownData.id).toBytes)
-      goto(ConnectionEstablished) using HandshakeContext(connection, remote, ownData)
-
-    case Event(_: ConnectionClosed |  _: CloseCommand | _: CommandFailed | StateTimeout, _) ⇒
-      stop()
-  }
-
-  private def updateState(ctx: PeerContext, newPeerData: PeerData): State = {
-    context.parent ! PeerStateChanged(newPeerData)
-    stay() using ctx.copy(peerData = newPeerData)
-  }
-
-  private def download(ctx: PeerContext, queue: List[QueuedDownload]): State = {
-    val newQueue: List[QueuedDownload] = {
-      val (pipeline, rest) = queue.splitAt(downloadQueueLimit)
-      pipeline.filterNot(_.pipelined).foreach {
-        case QueuedDownload(_, size, PieceBlock(index, offset, _), _) ⇒
-          Write(Msg.Request(index, offset, size))
-      }
-      pipeline.map(_.copy(pipelined = true)) ++ rest
-    }
-    if (newQueue.nonEmpty) {
-      stay() using ctx.copy(newQueue)
-    } else {
-      goto(ConnectionEstablished) using ctx
-    }
-  }
-
-  @tailrec
-  private def upload(ctx: PeerContext, queue: List[QueuedUpload]): State = queue match {
-    case QueuedUpload(index, offset, length, data) :: rest if data.nonEmpty ⇒
-      ctx.connection ! Write(Msg.Piece(index, offset, data))
-      upload(ctx, rest)
-
-    case _ ⇒
-      if (ctx.peerData.choking && queue.length < uploadQueueLimit) {
-        log.info("Unchoking peer: {}", ctx.peerData.address)
-        ctx.connection ! Write(Msg.Unchoke())
-        val data = ctx.peerData.copy(choking = false)
-        context.parent ! PeerStateChanged(data)
-        stay() using ctx.copy(uploadQueue = queue, peerData = data)
-      } else {
-        stay() using ctx.copy(uploadQueue = queue)
-      }
-  }
+  startWith(ConnectionEstablished, HandshakeContext(peerAddress, initData))
 
   def stateMessage: StateFunction = {
-    case Event(Received(Msg(Msg.Request(request @ PieceBlockRequest(index, offset, length)))), ctx: PeerContext) if !ctx.peerData.choking && ctx.uploadQueue.length < uploadQueueLimit ⇒
+    case Event(Request(_), _) ⇒
+      pushBuffer()
+      stay()
+
+    case Event(Msg.Request(request @ PieceBlockRequest(index, offset, length)), ctx: PeerContext) if !ctx.peerData.choking ⇒
       log.info("Peer requested piece block: {}", request)
-      context.parent ! request
+      peerDispatcher ! request
       val queue = ctx.uploadQueue :+ QueuedUpload(index, offset, length)
       if (queue.length == uploadQueueLimit) {
         log.info("Upload limit reached, choking peer: {}", ctx.peerData.address)
-        ctx.connection ! Write(Msg.Choke())
+        pushMessage(Msg.Choke())
         val data = ctx.peerData.copy(choking = true)
-        context.parent ! PeerStateChanged(data)
+        peerDispatcher ! PeerStateChanged(data)
         stay() using ctx.copy(uploadQueue = queue, peerData = data)
       } else {
         stay() using ctx.copy(uploadQueue = queue)
@@ -141,180 +85,239 @@ class PeerConnection(torrent: TorrentMetadata) extends FSM[PeerConnectionState, 
     case Event(UpdateBitField(completed), ctx: PeerContext) ⇒
       if (ctx.ownData.completed.subsetOf(completed)) {
         completed.&~(ctx.ownData.completed)
-          .foreach(piece ⇒ ctx.connection ! Write(Msg.Have(piece)))
+          .foreach(piece ⇒ pushMessage(Msg.Have(piece)))
       } else {
-        ctx.connection ! Write(Msg.BitField(torrent.pieces, completed))
+        pushMessage(Msg.BitField(torrent.pieces, completed))
       }
       stay() using ctx.copy(ownData = ctx.ownData.copy(completed = completed))
 
-    case Event(Received(Msg.KeepAlive(_)), ctx: PeerContext) ⇒
-      stay()
-
-    case Event(Received(Msg(Msg.Choke(_))), ctx: PeerContext) ⇒
+    case Event(Msg.Choke(_), ctx: PeerContext) ⇒
       log.debug("Choked: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(chokedBy = true))
 
-    case Event(Received(Msg(Msg.Unchoke(_))), ctx: PeerContext) ⇒
+    case Event(Msg.Unchoke(_), ctx: PeerContext) ⇒
       log.debug("Unchoked: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(chokedBy = false))
 
-    case Event(Received(Msg(Msg.Interested(_))), ctx: PeerContext) ⇒
+    case Event(Msg.Interested(_), ctx: PeerContext) ⇒
       log.debug("Interested: {}", ctx.peerData.address)
       if (ctx.peerData.choking && ctx.uploadQueue.length < uploadQueueLimit) {
-        ctx.connection ! Write(Msg.Unchoke())
+        pushMessage(Msg.Unchoke())
         updateState(ctx, ctx.peerData.copy(interestedBy = true, choking = false))
       } else {
         updateState(ctx, ctx.peerData.copy(interestedBy = true))
       }
 
-    case Event(Received(Msg(Msg.NotInterested(_))), ctx: PeerContext) ⇒
+    case Event(Msg.NotInterested(_), ctx: PeerContext) ⇒
       log.debug("Not interested: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(interestedBy = false))
 
-    case Event(Received(Msg(Msg.Have(piece))), ctx: PeerContext) if (0 until torrent.pieces).contains(piece) ⇒
+    case Event(Msg.Have(piece), ctx: PeerContext) if (0 until torrent.pieces).contains(piece) ⇒
       log.debug("Peer has piece #{}: {}", piece, ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(completed = ctx.peerData.completed + piece))
 
-    case Event(Received(Msg(msg @ Msg.BitField(bitSet))), ctx: PeerContext) if msg.length == torrent.pieces / 8 + 1 ⇒
-      val interesting = bitSet.&~(ctx.ownData.completed).nonEmpty
-      if (interesting) {
-        ctx.connection ! Write(Msg.Interested())
+    case Event(msg @ Msg.BitField(bitSet), ctx: PeerContext) ⇒
+      if (msg.length == torrent.pieces / 8 + 1) {
+        val interesting = bitSet.&~(ctx.ownData.completed).nonEmpty
+        if (interesting) {
+          pushMessage(Msg.Interested())
+        }
+        log.debug("Bit field updated: {}", ctx.peerData.address)
+        updateState(ctx, ctx.peerData.copy(completed = bitSet, interesting = interesting))
+      } else {
+        onError(new IllegalArgumentException("Invalid bit field"))
+        stop()
       }
-      log.debug("Bit field updated: {}", ctx.peerData.address)
-      updateState(ctx, ctx.peerData.copy(completed = bitSet, interesting = interesting))
   }
 
-  when(ConnectionEstablished) {
+  when(ConnectionEstablished, 10 minutes) {
     val pf: StateFunction = {
-      case Event(Received(Msg.Handshake(PeerHandshake(protocol, infoHash, peerId))), HandshakeContext(connection, peerAddress, ownData)) ⇒
-        if (infoHash != torrent.infoHash) {
-          log.warning("Invalid info hash from {} ({})", peerAddress, peerId)
+      case Event(PeerHandshake(protocol, infoHash, peerId), HandshakeContext(address, ownData)) ⇒
+        if (infoHash != ownData.infoHash) {
+          log.warning("Invalid info hash from {} ({})", address, peerId)
           self ! Close
           stay()
         } else {
-          log.info("Peer handshake finished: {} (id = {})", peerAddress, peerId.utf8String)
-          val newPeerData = PeerData(peerAddress, peerId, infoHash)
-          context.parent ! PeerConnected(newPeerData)
-          connection ! Write(Msg.BitField(torrent.pieces, ownData.completed))
-          stay() using PeerContext(Nil, Nil, connection, ownData, newPeerData)
+          log.info("Peer handshake finished: {} (id = {})", address, peerId.utf8String)
+          val newPeerData = PeerData(address, peerId, infoHash)
+          peerDispatcher ! PeerConnected(newPeerData)
+          pushMessage(Msg.BitField(torrent.pieces, ownData.completed))
+          stay() using PeerContext(Nil, Nil, ownData, newPeerData)
         }
 
-      case Event(request @ PieceBlockRequest(index, offset, size), ctx: PeerContext) ⇒
+      case Event(request @ PieceBlockRequest(index, offset, length), ctx: PeerContext) ⇒
         val sender = context.sender()
-        if (ctx.peerData.chokedBy || !ctx.peerData.completed(index)) {
-          sender ! BlockDownloadFailed(index, offset, size)
+        if (ctx.ownData.completed(index)) {
+          // From cache
+          peerDispatcher.tell(request, sender)
+          stay()
+        } else if (ctx.peerData.chokedBy || !ctx.peerData.completed(index)) {
+          log.warning("Block download failed: peer choked ({}/{}/{})", index, offset, length)
+          sender ! BlockDownloadFailed(index, offset, length)
           stay()
         } else {
           self.tell(request, sender)
           goto(Downloading)
         }
 
-      case Event(_: ConnectionClosed | _: CloseCommand | _: CommandFailed, ctx: PeerContext) ⇒
-        ctx.connection ! Close
+      case Event(StateTimeout | Cancel, ctx: PeerContext) ⇒
         log.warning(s"Peer disconnected: ${ctx.peerData.address}")
-        context.parent ! PeerDisconnected(ctx.peerData)
+        peerDispatcher ! PeerDisconnected(ctx.peerData)
+        onComplete()
         stop()
 
-      case Event(_: ConnectionClosed | _: CloseCommand | _: CommandFailed, HandshakeContext(connection, address, _)) ⇒
-        connection ! Close
+      case Event(StateTimeout | Cancel, HandshakeContext(address, _)) ⇒
         log.warning(s"Handshake failed: $address")
+        onComplete()
         stop()
     }
     pf.orElse(stateMessage)
   }
 
-  when(Downloading, 3 seconds) {
+  when(Downloading, 15 seconds) {
     val pf: StateFunction = {
-      case Event(PieceBlockRequest(index, offset, size), ctx @ PeerContext(queue, _, connection, ownData, peerData)) ⇒
-        if (ctx.peerData.chokedBy) {
-          sender() ! BlockDownloadFailed(index, offset, size)
+      case Event(request @ PieceBlockRequest(index, offset, length), ctx @ PeerContext(queue, _, ownData, peerData)) ⇒
+        if (ownData.completed(index)) {
+          // From cache
+          peerDispatcher.tell(request, sender)
+          stay()
+        } else if (ctx.peerData.chokedBy) {
+          log.warning("Block download failed: peer choked ({}/{}/{})", index, offset, length)
+          sender() ! BlockDownloadFailed(index, offset, length)
           stay()
         } else if (queue.length < downloadQueueLimit) {
-          ctx.connection ! Write(Msg.Request(index, offset, size))
-          stay() using ctx.copy(queue :+ QueuedDownload(pipelined = true, size, PieceBlock(index, offset, ByteString.empty), sender()))
+          pushMessage(Msg.Request(index, offset, length))
+          stay() using ctx.copy(queue :+ QueuedDownload(pipelined = true, index, offset, length, sender()))
         } else {
-          stay() using ctx.copy(queue :+ QueuedDownload(pipelined = false, size, PieceBlock(index, offset, ByteString.empty), sender()))
+          stay() using ctx.copy(queue :+ QueuedDownload(pipelined = false, index, offset, length, sender()))
         }
 
-      case Event(Received(Msg(msg @ Msg.Piece(block @ PieceBlock(_, _, data)))), ctx @ PeerContext(QueuedDownload(true, size, PieceBlock(index, offset, _), handler) :: rest, _, connection, ownData, peerData)) if block.index == index && block.offset == offset && msg.length - 9 == size ⇒
-        log.debug("Block requested: {}/{}/{}", index, offset, size)
-        if (data.length >= size) {
-          val (keep, resend) = data.splitAt(size)
-          log.debug("Block finished: {}/{}/{}", index, offset, size)
-          handler ! DownloadedBlock(index, offset, keep)
-          if (resend.nonEmpty) {
-            self.forward(Received(resend))
+      case Event(Msg.Piece(block @ PieceBlock(index, offset, data)), ctx @ PeerContext(queue, _, ownData, peerData)) if block.index == index && block.offset == offset ⇒
+        val (drop, keep) = queue.partition(q ⇒ q.index == index && q.offset == offset && q.length == data.length)
+        if (drop.nonEmpty) {
+          log.debug("Block received: {}/{}/{}", index, offset, data.length)
+          drop.foreach {
+            case QueuedDownload(_, _, _, _, handler) ⇒
+              handler ! DownloadedBlock(index, offset, data)
           }
-          download(ctx, rest)
-        } else {
-          stay() using ctx.copy(QueuedDownload(pipelined = true, size, block, handler) :: rest)
-        }
-
-      case Event(Received(data), ctx @ PeerContext(QueuedDownload(true, size, block, handler) :: rest, _, connection, ownData, peerData)) if block.data.nonEmpty ⇒
-        if (data.length >= size - block.data.length) {
-          val (keep, resend) = data.splitAt(size - block.data.length)
-          log.debug("Block finished: {}/{}/{}", block.index, block.offset, size)
-          handler ! DownloadedBlock(block.index, block.offset, block.data ++ keep)
-          if (resend.nonEmpty) {
-            self.forward(Received(resend))
-          }
-          download(ctx, rest)
-        } else {
-          stay() using ctx.copy(QueuedDownload(pipelined = true, size, block.copy(data = block.data ++ data), handler) :: rest)
-        }
-
-      case Event(CancelBlockDownload(index, offset, length), ctx @ PeerContext(queue, _, connection, ownData, peerData)) ⇒
-        val (drop, keep) = queue.partition(q ⇒ q.block.index == index && q.block.offset == offset && q.blockSize == length)
-        drop.foreach(_.handler ! BlockDownloadFailed(index, offset, length))
-        if (drop.exists(_.pipelined)) {
-          connection ! Write(Msg.Cancel(index, offset, length))
         }
         download(ctx, keep)
 
-      case Event(Received(Msg(Msg.Choke(_))), ctx @ PeerContext(queue, _, connection, ownData, peerData)) ⇒
+      case Event(CancelBlockDownload(index, offset, length), ctx @ PeerContext(queue, _, ownData, peerData)) ⇒
+        val (drop, keep) = queue.partition(q ⇒ q.index == index && q.offset == offset && q.length == length)
+        drop.foreach(_.handler ! BlockDownloadFailed(index, offset, length))
+        if (drop.exists(_.pipelined)) {
+          pushMessage(Msg.Cancel(index, offset, length))
+        }
+        download(ctx, keep)
+
+      case Event(Msg.Choke(_), ctx @ PeerContext(queue, _, ownData, peerData)) ⇒
         val (keep, drop) = queue.partition(_.pipelined)
         drop.foreach {
-          case QueuedDownload(_, size, PieceBlock(index, offset, _), handler) ⇒
-            handler ! BlockDownloadFailed(index, offset, size)
+          case QueuedDownload(_, index, offset, length, handler) ⇒
+            log.debug("Block download failed: peer choked ({}/{}/{})", index, offset, length)
+            handler ! BlockDownloadFailed(index, offset, length)
         }
         val data = peerData.copy(chokedBy = true)
-        context.parent ! PeerStateChanged(data)
+        peerDispatcher ! PeerStateChanged(data)
         download(ctx.copy(peerData = data), keep)
 
-      case Event(StateTimeout, ctx @ PeerContext(queue, _, connection, ownData, peerData)) ⇒
+      case Event(StateTimeout, ctx @ PeerContext(queue, _, ownData, peerData)) ⇒
         if (queue.nonEmpty) {
-          log.warning("Peer read timeout: {}", peerData.address)
           queue.foreach {
-            case QueuedDownload(_, size, PieceBlock(index, offset, _), handler) ⇒
-              handler ! BlockDownloadFailed(index, offset, size)
+            case QueuedDownload(pipelined, index, offset, length, handler) ⇒
+              if (pipelined) {
+                pushMessage(Msg.Cancel(index, offset, length))
+              }
+              log.debug("Block download failed: read timeout ({}/{}/{})", index, offset, length)
+              handler ! BlockDownloadFailed(index, offset, length)
           }
-          context.parent ! PeerDisconnected(peerData)
+          peerDispatcher ! PeerDisconnected(peerData)
+          onComplete()
           stop()
         } else {
           log.warning("Connection in downloading state with empty queue: {}", self)
           goto(ConnectionEstablished)
         }
 
-      case Event(_: ConnectionClosed | _: CommandFailed | _: CloseCommand, PeerContext(queue, _, connection, ownData, peerData)) ⇒
+      case Event(Cancel, PeerContext(queue, _, ownData, peerData)) ⇒
         queue.foreach {
-          case QueuedDownload(pipelined, size, PieceBlock(index, offset, _), handler) ⇒
-            if (pipelined) {
-              connection ! Write(Msg.Cancel(index, offset, size))
-            }
-            handler ! BlockDownloadFailed(index, offset, size)
+          case QueuedDownload(pipelined, index, offset, length, handler) ⇒
+            handler ! BlockDownloadFailed(index, offset, length)
+            log.debug("Block download failed: peer connection closed ({}/{}/{})", index, offset, length)
         }
-        connection ! Close
         log.warning(s"Peer disconnected: ${peerData.address}")
-        context.parent ! PeerDisconnected(peerData)
+        peerDispatcher ! PeerDisconnected(peerData)
+        onComplete()
         stop()
     }
     pf.orElse(stateMessage)
   }
 
   whenUnhandled {
-    case Event(Received(data), _: PeerContext | _: HandshakeContext) ⇒
-      log.warning("Invalid data received: {}", data)
-      self ! Close
+    case Event(Msg.Piece(block), ctx) ⇒
+      log.debug("Unhandled block: {}; Context: {}", block, ctx)
+      stay()
+
+    case Event(msg, ctx) ⇒
+      log.warning("Unhandled message: {}; Context: {}", msg, ctx)
       stay()
   }
+
+  private def pushBuffer(): Unit = {
+    if (totalDemand > 0) {
+      val (send, keep) = messageBuffer.splitAt(totalDemand.toInt)
+      send.foreach(msg ⇒ onNext(msg))
+      messageBuffer = keep
+    }
+  }
+
+  private def pushMessage(message: PeerTcpMessage): Unit = {
+    require(messageBuffer.length < 200)
+    messageBuffer :+= message
+    pushBuffer()
+  }
+
+  private def updateState(ctx: PeerContext, newPeerData: PeerData): State = {
+    peerDispatcher ! PeerStateChanged(newPeerData)
+    stay() using ctx.copy(peerData = newPeerData)
+  }
+
+  private def download(ctx: PeerContext, queue: List[QueuedDownload]): State = {
+    val newQueue: List[QueuedDownload] = {
+      val (pipeline, rest) = queue.splitAt(downloadQueueLimit)
+      pipeline.filterNot(_.pipelined).foreach {
+        case QueuedDownload(_, index, offset, length, _) ⇒
+          pushMessage(Msg.Request(index, offset, length))
+      }
+      pipeline.map(_.copy(pipelined = true)) ++ rest
+    }
+    if (newQueue.nonEmpty) {
+      stay() using ctx.copy(newQueue)
+    } else {
+      goto(ConnectionEstablished) using ctx.copy(Nil)
+    }
+  }
+
+  @tailrec
+  private def upload(ctx: PeerContext, queue: List[QueuedUpload]): State = queue match {
+    case QueuedUpload(index, offset, length, data) :: rest if data.nonEmpty ⇒
+      pushMessage(Msg.Piece(index, offset, data))
+      upload(ctx, rest)
+
+    case _ ⇒
+      if (ctx.peerData.choking && queue.length < uploadQueueLimit) {
+        log.info("Unchoking peer: {}", ctx.peerData.address)
+        pushMessage(Msg.Unchoke())
+        val data = ctx.peerData.copy(choking = false)
+        peerDispatcher ! PeerStateChanged(data)
+        stay() using ctx.copy(uploadQueue = queue, peerData = data)
+      } else {
+        stay() using ctx.copy(uploadQueue = queue)
+      }
+  }
+}
+
+object PeerConnection {
+  def messageFlow = Flow[ByteString].transform(() ⇒ new PeerConnectionStage(131072))
 }

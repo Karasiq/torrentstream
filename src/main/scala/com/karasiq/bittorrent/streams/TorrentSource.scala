@@ -1,12 +1,14 @@
 package com.karasiq.bittorrent.streams
 
 import akka.actor.{ActorRef, Props}
-import akka.stream.scaladsl.Source
-import akka.util.ByteString
+import akka.pattern.ask
+import akka.stream.scaladsl.{Flow, Source}
+import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.dispatcher.PeerProtocol.PieceBlockRequest
 import com.karasiq.bittorrent.dispatcher._
 import com.karasiq.bittorrent.format.{TorrentFileInfo, TorrentMetadata, TorrentPiece}
 
+import scala.concurrent.duration._
 import scala.language.postfixOps
 
 object TorrentSource {
@@ -16,6 +18,7 @@ object TorrentSource {
     Source
       .actorPublisher[DownloadedBlock](Props(classOf[PeerBlockPublisher], peerDispatcher, size))
       .mapMaterializedValue(loader ⇒ blocks.foreach(block ⇒ loader ! PieceBlockRequest(index, block.offset, block.size)))
+      .take(blocks.length)
       .fold(ByteString.empty)((bs, block) ⇒ bs ++ block.data)
   }
 
@@ -32,10 +35,19 @@ object TorrentSource {
     pieces(dispatcher, TorrentPiece.sequence(torrent.files).toVector.zipWithIndex)
   }
 
-  def file(dispatcher: ActorRef, torrent: TorrentMetadata, file: TorrentFileInfo, offset: Long = 0): Unit = {
+  def file(dispatcher: ActorRef, torrent: TorrentMetadata, file: TorrentFileInfo, start: Long, size: Long): Source[DownloadedPiece, Unit] = {
+    val drop: Int = (start / torrent.files.pieceLength).toInt
+    val take: Int = math.ceil(size / torrent.files.pieceLength).toInt
     val pcs = TorrentPiece.sequence(torrent.files).toVector.zipWithIndex
       .filter(_._1.file == file)
-      .drop((offset / torrent.files.pieceLength).toInt)
+      .slice(drop, drop + take)
     pieces(dispatcher, pcs)
+  }
+
+  def dispatcher(torrentManager: ActorRef): Flow[TorrentMetadata, PeerDispatcherData, Unit] = {
+    implicit val timeout = Timeout(10 seconds)
+    Flow[TorrentMetadata]
+      .mapAsync(1)(torrent ⇒ (torrentManager ? CreateDispatcher(torrent)).mapTo[PeerDispatcherData])
+      .initialTimeout(10 seconds)
   }
 }
