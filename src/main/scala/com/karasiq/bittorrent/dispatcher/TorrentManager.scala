@@ -7,8 +7,8 @@ import akka.stream.scaladsl.Tcp._
 import akka.stream.scaladsl._
 import akka.stream.{ActorMaterializer, SourceShape}
 import akka.util.{ByteString, Timeout}
-import com.karasiq.bittorrent.dispatcher.PeerProtocol.PeerHandshake
 import com.karasiq.bittorrent.format.TorrentMetadata
+import com.karasiq.bittorrent.protocol.PeerMessages.PeerHandshake
 import org.apache.commons.codec.binary.Hex
 
 import scala.concurrent.Future

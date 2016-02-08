@@ -8,8 +8,9 @@ import akka.stream.actor.ActorPublisher
 import akka.stream.scaladsl.{Tcp, _}
 import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
-import com.karasiq.bittorrent.dispatcher.PeerProtocol.{PeerHandshake, PieceBlockRequest}
 import com.karasiq.bittorrent.format.TorrentMetadata
+import com.karasiq.bittorrent.protocol.PeerMessages
+import com.karasiq.bittorrent.protocol.PeerMessages.{PeerHandshake, PieceBlockRequest}
 
 import scala.collection.{BitSet, mutable}
 import scala.concurrent.duration._
@@ -94,7 +95,6 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
         result.foreach(peer ⇒ demand += peer → (demand(peer) + 1))
         sender() ! PeerList(result)
       } else {
-        val self = context.self
         val sender = context.sender()
         context.system.scheduler.scheduleOnce(3 seconds) {
           // Retry
@@ -105,7 +105,7 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
     case piece @ DownloadedPiece(index, data) ⇒
       val completed = if (pieces.length > bufferSize) {
         val (drop, keep) = pieces.splitAt(1)
-        log.info("Piece unbuffered: #{}", drop.head.pieceIndex)
+        log.debug("Piece unbuffered: #{}", drop.head.pieceIndex)
         pieces = keep :+ piece
         ownData.completed + index -- drop.map(_.pieceIndex)
       } else {
@@ -113,13 +113,13 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
         ownData.completed + index
       }
       this.ownData = ownData.copy(completed = completed)
-      log.info("Piece buffered: #{}", index)
+      log.debug("Piece buffered: #{}", index)
       peers.keys.foreach(_ ! UpdateBitField(completed))
 
     case PieceBlockRequest(index, offset, length) ⇒
       pieces.find(p ⇒ p.pieceIndex == index && p.data.length >= (offset + length)) match {
         case Some(DownloadedPiece(`index`, data)) ⇒
-          log.info("Block uploaded: {}/{}/{}", index, offset, length)
+          log.debug("Block uploaded: {}/{}/{}", index, offset, length)
           val block = DownloadedBlock(index, offset, data.slice(offset, offset + length))
           require(block.data.length == length)
           sender() ! block
@@ -140,6 +140,7 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
         val output = b.add(
           Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
             .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
+            .keepAlive[ByteString](30 seconds, () ⇒ PeerMessages.KeepAlive)
         )
         FlowShape(messages.in, output.out)
       })

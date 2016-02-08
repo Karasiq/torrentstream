@@ -4,9 +4,10 @@ import akka.actor.{ActorRef, Props}
 import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Source}
 import akka.util.{ByteString, Timeout}
-import com.karasiq.bittorrent.dispatcher.PeerProtocol.PieceBlockRequest
 import com.karasiq.bittorrent.dispatcher._
 import com.karasiq.bittorrent.format.{TorrentFileInfo, TorrentMetadata, TorrentPiece}
+import com.karasiq.bittorrent.protocol.PeerMessages
+import com.karasiq.bittorrent.protocol.PeerMessages.PieceBlockRequest
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
@@ -28,7 +29,7 @@ object TorrentSource {
 
   def pieces(dispatcher: ActorRef, pcs: Vector[(TorrentPiece, Int)]): Source[DownloadedPiece, Unit] = {
     Source(pcs)
-      .flatMapConcat({ case (piece, index) ⇒ pieceSource(dispatcher, index, piece) })
+      .flatMapMerge(25, { case (piece, index) ⇒ pieceSource(dispatcher, index, piece) })
   }
 
   def torrent(dispatcher: ActorRef, torrent: TorrentMetadata): Source[DownloadedPiece, Unit] = {

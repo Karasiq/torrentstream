@@ -6,6 +6,7 @@ import java.time.Instant
 
 import akka.util.ByteString
 import com.karasiq.bittorrent.format.BEncodeImplicits._
+import org.apache.commons.codec.binary.Hex
 import org.apache.commons.io.IOUtils
 
 import scala.util.Try
@@ -13,6 +14,14 @@ import scala.util.Try
 case class TorrentMetadata(infoHash: ByteString, announce: String, announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], files: TorrentFiles) {
   val size: Long = files.files.map(_.size).sum
   val pieces: Int = files.pieces.length / 20
+
+  val name: String = {
+    files.files.head.name.split("/", 2).head
+  }
+
+  def infoHashString: String = {
+    Hex.encodeHexString(infoHash.toArray).toUpperCase
+  }
 }
 
 case class TorrentFiles(name: String, pieceLength: Int, pieces: ByteString, files: Seq[TorrentFileInfo])
@@ -51,7 +60,7 @@ object TorrentMetadata {
       val length = data.number("length")
       val name = data.string("name")
       val pieceLength = data.number("piece length")
-      val pieces = data.get("pieces").map(_.asByteString)
+      val pieces = data.byteString("pieces")
       if (files.isDefined) {
         for {
           name <- name

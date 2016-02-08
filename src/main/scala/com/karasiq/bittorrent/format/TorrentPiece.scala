@@ -15,13 +15,14 @@ object TorrentPiece {
 
     @tailrec
     def pieceSequenceRec(buffer: ArrayBuffer[TorrentPiece], offset: Long, fileOffset: Long, pieceIndex: Int, fileSeq: Seq[TorrentFileInfo]): IndexedSeq[TorrentPiece] = fileSeq match {
-      case Seq(currentFile, fs @ _*) if fileOffset >= currentFile.size ⇒
+      case Seq(currentFile, fs @ _*) if fs.nonEmpty && fileOffset >= currentFile.size ⇒
         pieceSequenceRec(buffer, offset, 0L, pieceIndex, fs)
 
       case fs @ Seq(currentFile, _*) if offset < totalSize ⇒
-        val length = Seq(files.pieceLength, (totalSize - offset).toInt).min
+        val length = Seq(files.pieceLength.toLong, totalSize - offset).min
+        require(length <= Int.MaxValue)
         val sha1 = files.pieces.slice(pieceIndex * 20, (pieceIndex * 20) + 20)
-        val piece = TorrentPiece(length, sha1, currentFile)
+        val piece = TorrentPiece(length.toInt, sha1, currentFile)
         pieceSequenceRec(buffer :+ piece, offset + length, fileOffset + length, pieceIndex + 1, fs)
 
       case other ⇒

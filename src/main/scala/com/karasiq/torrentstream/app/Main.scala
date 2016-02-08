@@ -1,8 +1,9 @@
 package com.karasiq.torrentstream.app
 
-import akka.actor.ActorSystem
+import akka.actor.{ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.stream.ActorMaterializer
+import com.karasiq.bittorrent.dispatcher.TorrentManager
 import com.typesafe.config.ConfigFactory
 import org.apache.log4j.BasicConfigurator
 
@@ -26,6 +27,7 @@ object Main extends App {
     }
   }))
 
-  val handler = new AppHandler(store)
+  val torrentManager = actorSystem.actorOf(Props[TorrentManager])
+  val handler = new AppHandler(torrentManager, store)
   Http().bindAndHandle(handler.route, "localhost", 8901)
 }

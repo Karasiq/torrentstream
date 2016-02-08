@@ -9,14 +9,12 @@ import akka.stream.scaladsl.{ImplicitMaterializer, Sink}
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher._
 
-import scala.concurrent.duration._
 import scala.language.postfixOps
 import scala.util.{Failure, Success}
 
 case class PieceFrom(source: ActorRef, data: DownloadedPiece)
 
 class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef) extends Actor with ActorLogging with ActorPublisher[DownloadedPiece] with ImplicitMaterializer {
-  import context.dispatcher
   private val blockSize = context.system.settings.config.getInt("karasiq.torrentstream.peer-load-balancer.block-size")
   private var piece: Option[DownloadedPiece] = None
 
@@ -35,15 +33,14 @@ class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef
   override def receive: Receive = {
     case PieceDownloadRequest(index, _) if this.piece.isEmpty ⇒
       log.info("Requesting piece #{}", request.index)
-      val self = context.self
       TorrentSource.pieceBlocks(peerDispatcher, request.index, request.piece, blockSize)
         .alsoTo(Sink.onComplete {
           case Success(_) ⇒
             // Nothing
 
-          case Failure(_) ⇒
-            log.warning("Retrying piece #{}", request.index)
-            context.system.scheduler.scheduleOnce(3 seconds, self, request)
+          case Failure(exc) ⇒
+            log.warning("Retrying piece #{} ({})", request.index, exc)
+            self ! request
         })
         .runWith(Sink.foreach(data ⇒ self ! DownloadedPiece(request.index, data)))
 
