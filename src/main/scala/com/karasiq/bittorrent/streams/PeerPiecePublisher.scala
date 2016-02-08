@@ -8,6 +8,7 @@ import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl.{ImplicitMaterializer, Sink}
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher._
+import com.karasiq.bittorrent.format.TorrentPiece
 
 import scala.language.postfixOps
 import scala.util.{Failure, Success}
@@ -31,18 +32,17 @@ class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef
   }
 
   override def receive: Receive = {
-    case PieceDownloadRequest(index, _) if this.piece.isEmpty ⇒
-      log.info("Requesting piece #{}", request.index)
-      TorrentSource.pieceBlocks(peerDispatcher, request.index, request.piece, blockSize)
+    case PieceDownloadRequest(TorrentPiece(index, _, _, _)) if this.piece.isEmpty ⇒
+      log.info("Requesting piece #{}", index)
+      TorrentSource.pieceBlocks(peerDispatcher, index, request.piece, blockSize)
         .alsoTo(Sink.onComplete {
           case Success(_) ⇒
             // Nothing
 
           case Failure(exc) ⇒
-            log.warning("Retrying piece #{} ({})", request.index, exc)
-            self ! request
+            context.stop(self)
         })
-        .runWith(Sink.foreach(data ⇒ self ! DownloadedPiece(request.index, data)))
+        .runWith(Sink.foreach(data ⇒ self ! DownloadedPiece(index, data)))
 
     case piece @ DownloadedPiece(index, data) if this.piece.isEmpty ⇒
       if (checkHash(data, request.piece.sha1)) {

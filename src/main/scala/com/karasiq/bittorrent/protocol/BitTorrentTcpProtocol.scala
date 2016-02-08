@@ -3,6 +3,7 @@ package com.karasiq.bittorrent.protocol
 import java.nio.ByteBuffer
 
 import akka.util.ByteString
+import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
 
 import scala.collection.BitSet
 import scala.util.Try
@@ -15,7 +16,7 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
       val byteBuffer = ByteBuffer.allocate(1 + 8 + protocolBytes.length + 20 + 20)
       byteBuffer.put(protocolBytes.length.toByte)
       byteBuffer.put(protocolBytes)
-      byteBuffer.put(ByteString(0, 0, 0, 0, 0, 0, 0, 0).toByteBuffer)
+      byteBuffer.put(ph.extensions.toBytes)
       byteBuffer.put(ph.infoHash.toByteBuffer)
       byteBuffer.put(ph.peerId.toByteBuffer)
       byteBuffer.flip()
@@ -29,12 +30,13 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
         assert(length == buffer.remaining() - 48)
         val protocol = new Array[Byte](length)
         buffer.get(protocol)
-        buffer.position(buffer.position() + 8)
+        val reserved = new Array[Byte](8)
+        buffer.get(reserved)
         val infoHash = new Array[Byte](20)
         buffer.get(infoHash)
         val id = new Array[Byte](20)
         buffer.get(id)
-        PeerHandshake(new String(protocol, "ASCII"), ByteString(infoHash), ByteString(id))
+        PeerHandshake(new String(protocol, "ASCII"), ByteString(infoHash), ByteString(id), PeerExtensions.fromBytes(reserved))
       }.toOption
     }
   }
@@ -61,18 +63,18 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
     }
   }
 
-  implicit object HaveMessageTcpProtocol extends TcpMessageProtocol[HavePiece] {
-    override def toBytes(hp: HavePiece): ByteString = {
+  implicit object HaveMessageTcpProtocol extends TcpMessageProtocol[PieceIndex] {
+    override def toBytes(hp: PieceIndex): ByteString = {
       val buffer = ByteBuffer.allocate(4)
       buffer.putInt(hp.index)
       buffer.flip()
       ByteString(buffer)
     }
 
-    override def fromBytes(bs: ByteString): Option[HavePiece] = {
+    override def fromBytes(bs: ByteString): Option[PieceIndex] = {
       Try {
         val buffer = bs.asByteBuffer
-        HavePiece(buffer.getInt)
+        PieceIndex(buffer.getInt)
       }.toOption
     }
   }

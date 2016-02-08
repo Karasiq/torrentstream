@@ -3,7 +3,7 @@ package com.karasiq.bittorrent.dispatcher
 import akka.util.ByteString
 import com.karasiq.bittorrent.format.TorrentPiece
 
-case class PieceDownloadRequest(index: Int, piece: TorrentPiece)
+case class PieceDownloadRequest(piece: TorrentPiece)
 
 case class DownloadedPiece(pieceIndex: Int, data: ByteString)
 

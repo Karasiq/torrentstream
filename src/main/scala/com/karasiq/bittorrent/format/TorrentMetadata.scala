@@ -15,10 +15,6 @@ case class TorrentMetadata(infoHash: ByteString, announce: String, announceList:
   val size: Long = files.files.map(_.size).sum
   val pieces: Int = files.pieces.length / 20
 
-  val name: String = {
-    files.files.head.name.split("/", 2).head
-  }
-
   def infoHashString: String = {
     Hex.encodeHexString(infoHash.toArray).toUpperCase
   }

@@ -19,7 +19,7 @@ import scala.util.{Random, Success}
 
 case class ConnectPeer(address: InetSocketAddress)
 case object RequestData
-case class DispatcherData(data: PeerData)
+case class DispatcherData(data: SeedData)
 
 case class RequestPeers(piece: Int, count: Int)
 case class PeerList(peers: Seq[ActorRef])
@@ -28,6 +28,7 @@ case class UpdateBitField(completed: BitSet)
 class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.{dispatcher, system}
   private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
+  private val updateBitField = config.getBoolean("update-bitfield")
 
   private val peers = mutable.Map.empty[ActorRef, PeerData]
   private val demand = mutable.Map.empty[ActorRef, Int].withDefaultValue(0)
@@ -45,7 +46,7 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
 
   private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
 
-  private var ownData = PeerData(ownAddress, peerId, torrent.infoHash)
+  private var ownData = SeedData(peerId, torrent.infoHash)
 
   private var pieces = Vector.empty[DownloadedPiece]
 
@@ -114,7 +115,9 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
       }
       this.ownData = ownData.copy(completed = completed)
       log.debug("Piece buffered: #{}", index)
-      peers.keys.foreach(_ ! UpdateBitField(completed))
+      if (updateBitField) {
+        peers.keys.foreach(_ ! UpdateBitField(completed))
+      }
 
     case PieceBlockRequest(index, offset, length) ⇒
       pieces.find(p ⇒ p.pieceIndex == index && p.data.length >= (offset + length)) match {

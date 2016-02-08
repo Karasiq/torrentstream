@@ -29,6 +29,12 @@ object PeerMessages extends TcpMessageSpecification with BitTorrentMessages with
       }
     }
 
+    object EmptyMsg {
+      def unapply(msg: PeerMessage): Option[Int] = {
+        if (msg.payload.isEmpty) Some(msg.id) else None
+      }
+    }
+
     sealed class PayloadMatcher[T: TcpMessageReader](id: Int) {
       def unapply(pm: PeerMessage): Option[T] = {
         for (payload <- Msg.payload[T](pm.payload) if pm.id == id) yield {
@@ -39,14 +45,13 @@ object PeerMessages extends TcpMessageSpecification with BitTorrentMessages with
 
     object RequestMsg extends PayloadMatcher[PieceBlockRequest](PeerMessageId.REQUEST)
     object PieceMsg extends PayloadMatcher[PieceBlock](PeerMessageId.PIECE)
-    object HaveMsg extends PayloadMatcher[HavePiece](PeerMessageId.HAVE)
+    object HaveMsg extends PayloadMatcher[PieceIndex](PeerMessageId.HAVE)
     object BitFieldMsg extends PayloadMatcher[BitField](PeerMessageId.BITFIELD)
 
-    object EmptyMsg {
-      def unapply(msg: PeerMessage): Option[Int] = {
-        if (msg.payload.isEmpty) Some(msg.id) else None
-      }
-    }
+    // Fast extension
+    object SuggestMsg extends PayloadMatcher[PieceIndex](PeerMessageId.SUGGEST_PIECE)
+    object RejectMsg extends PayloadMatcher[PieceBlockRequest](PeerMessageId.REJECT_REQUEST)
+    object AllowedMsg extends PayloadMatcher[PieceIndex](PeerMessageId.ALLOWED_FAST)
   }
 }
 

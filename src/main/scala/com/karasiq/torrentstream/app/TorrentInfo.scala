@@ -12,7 +12,7 @@ object TorrentInfo {
       torrent.createdBy.getOrElse(""),
       torrent.files.files.map(f ⇒ f.name → f.size),
       torrent.infoHashString,
-      torrent.name,
+      torrent.files.name,
       torrent.size
     )
   }

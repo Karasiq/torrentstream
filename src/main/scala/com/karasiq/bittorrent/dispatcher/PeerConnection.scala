@@ -1,9 +1,9 @@
 package com.karasiq.bittorrent.dispatcher
 
+import java.io.IOException
 import java.net.InetSocketAddress
 
 import akka.actor.{ActorRef, FSM}
-import akka.io.Tcp._
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl._
@@ -12,9 +12,10 @@ import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
 import com.karasiq.bittorrent.dispatcher.PeerConnectionState._
 import com.karasiq.bittorrent.format.TorrentMetadata
 import com.karasiq.bittorrent.protocol.PeerMessages._
-import com.karasiq.bittorrent.protocol.{PeerMessageId, PeerMessages, TcpMessageWriter}
+import com.karasiq.bittorrent.protocol.{PeerMessageId, TcpMessageWriter}
 
 import scala.annotation.tailrec
+import scala.collection.BitSet
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
@@ -35,15 +36,15 @@ object PeerConnectionState {
 
 sealed trait PeerConnectionContext
 object PeerConnectionContext {
-  case class HandshakeContext(address: InetSocketAddress, ownData: PeerData) extends PeerConnectionContext
+  case class HandshakeContext(address: InetSocketAddress, ownData: SeedData) extends PeerConnectionContext
 
   case class QueuedDownload(pipelined: Boolean, index: Int, offset: Int, length: Int, handler: ActorRef)
   case class QueuedUpload(index: Int, offset: Int, length: Int, data: ByteString = ByteString.empty)
-  case class PeerContext(downloadQueue: List[QueuedDownload], uploadQueue: List[QueuedUpload], ownData: PeerData, peerData: PeerData) extends PeerConnectionContext
+  case class PeerContext(downloadQueue: List[QueuedDownload], uploadQueue: List[QueuedUpload], ownData: SeedData, peerData: PeerData) extends PeerConnectionContext
 }
 
-// TODO: Fast peer extension http://bittorrent.org/beps/bep_0006.html
-class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAddress: InetSocketAddress, initData: PeerData) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with ImplicitMaterializer with PeerMessageMatcher {
+// TODO: Encryption, DHT, UDP
+class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAddress: InetSocketAddress, initData: SeedData) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with ImplicitMaterializer with PeerMessageMatcher {
   import context.system
 
   // Settings
@@ -60,18 +61,27 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
       pushBuffer()
       stay()
 
-    case Event(RequestMsg(request @ PieceBlockRequest(index, offset, length)), ctx: PeerContext) if !ctx.peerData.choking ⇒
-      log.debug("Peer requested piece block: {}", request)
-      peerDispatcher ! request
-      val queue = ctx.uploadQueue :+ QueuedUpload(index, offset, length)
-      if (queue.length == uploadQueueLimit) {
-        log.info("Upload limit reached, choking peer: {}", ctx.peerData.address)
-        pushMessage(PeerMessage(PeerMessageId.CHOKE))
-        val data = ctx.peerData.copy(choking = true)
-        peerDispatcher ! PeerStateChanged(data)
-        stay() using ctx.copy(uploadQueue = queue, peerData = data)
+    case Event(RequestMsg(request @ PieceBlockRequest(index, offset, length)), ctx: PeerContext) ⇒
+      if (ctx.peerData.choking) {
+        if (ctx.peerData.extensions.fast) {
+          pushMessage(PeerMessage(PeerMessageId.REJECT_REQUEST, request))
+        } else {
+          log.warning("Piece request while choked: {}", ctx.peerData.address)
+        }
+        stay()
       } else {
-        stay() using ctx.copy(uploadQueue = queue)
+        log.debug("Peer requested piece block: {}", request)
+        peerDispatcher ! request
+        val queue = ctx.uploadQueue :+ QueuedUpload(index, offset, length)
+        if (queue.length == uploadQueueLimit) {
+          log.info("Upload limit reached, choking peer: {}", ctx.peerData.address)
+          pushMessage(PeerMessage(PeerMessageId.CHOKE))
+          val data = ctx.peerData.copy(choking = true)
+          peerDispatcher ! PeerStateChanged(data)
+          stay() using ctx.copy(uploadQueue = queue, peerData = data)
+        } else {
+          stay() using ctx.copy(uploadQueue = queue)
+        }
       }
 
     case Event(DownloadedBlock(index, offset, data), ctx: PeerContext) ⇒
@@ -87,7 +97,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
     case Event(UpdateBitField(completed), ctx: PeerContext) ⇒
       if (ctx.ownData.completed.subsetOf(completed)) {
         completed.&~(ctx.ownData.completed)
-          .foreach(piece ⇒ pushMessage(PeerMessage(PeerMessageId.HAVE, HavePiece(piece))))
+          .foreach(piece ⇒ pushMessage(PeerMessage(PeerMessageId.HAVE, PieceIndex(piece))))
       } else {
         pushMessage(PeerMessage(PeerMessageId.BITFIELD, BitField(torrent.pieces, completed)))
       }
@@ -114,36 +124,68 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
       log.debug("Not interested: {}", ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(interestedBy = false))
 
-    case Event(HaveMsg(HavePiece(piece)), ctx: PeerContext) if (0 until torrent.pieces).contains(piece) ⇒
+    case Event(HaveMsg(PieceIndex(piece)), ctx: PeerContext) if (0 until torrent.pieces).contains(piece) ⇒
       log.debug("Peer has piece #{}: {}", piece, ctx.peerData.address)
       updateState(ctx, ctx.peerData.copy(completed = ctx.peerData.completed + piece))
 
     case Event(BitFieldMsg(BitField(length, bitSet)), ctx: PeerContext) ⇒
       if (length == torrent.pieces) {
         val interesting = bitSet.&~(ctx.ownData.completed).nonEmpty
-        if (interesting) {
+        if (interesting && !ctx.peerData.interesting) {
           pushMessage(PeerMessage(PeerMessageId.INTERESTED))
+        } else if (!interesting && ctx.peerData.interesting) {
+          pushMessage(PeerMessage(PeerMessageId.NOT_INTERESTED))
         }
         log.debug("Bit field updated: {}", ctx.peerData.address)
         updateState(ctx, ctx.peerData.copy(completed = bitSet, interesting = interesting))
       } else {
+        log.warning("Invalid bit field")
         onError(new IllegalArgumentException("Invalid bit field"))
         stop()
       }
+
+    // Fast extension
+    case Event(EmptyMsg(PeerMessageId.HAVE_ALL), ctx: PeerContext) if ctx.peerData.extensions.fast ⇒
+      if (!ctx.peerData.interesting) {
+        pushMessage(PeerMessage(PeerMessageId.INTERESTED))
+      }
+      log.debug("Have all: {}", ctx.peerData.address)
+      val set = BitSet.newBuilder
+      set.sizeHint(torrent.pieces)
+      (0 until torrent.pieces).foreach(set += _)
+      updateState(ctx, ctx.peerData.copy(completed = set.result(), interesting = true))
+
+    case Event(EmptyMsg(PeerMessageId.HAVE_NONE), ctx: PeerContext) if ctx.peerData.extensions.fast ⇒
+      log.debug("Have none: {}", ctx.peerData.address)
+      if (ctx.peerData.interesting) {
+        pushMessage(PeerMessage(PeerMessageId.NOT_INTERESTED))
+      }
+      updateState(ctx, ctx.peerData.copy(interesting = false))
+
+    case Event(SuggestMsg(PieceIndex(piece)), ctx: PeerContext) if ctx.peerData.extensions.fast ⇒
+      log.debug("Suggested piece: {}", piece)
+      stay()
+
+    case Event(AllowedMsg(PieceIndex(piece)), ctx: PeerContext) if ctx.peerData.extensions.fast ⇒
+      log.debug("Allowed piece: {}", piece)
+      stay()
   }
 
   when(ConnectionEstablished, 10 minutes) {
     val pf: StateFunction = {
-      case Event(PeerHandshake(protocol, infoHash, peerId), HandshakeContext(address, ownData)) ⇒
+      case Event(PeerHandshake(protocol, infoHash, peerId, extensions), HandshakeContext(address, ownData)) ⇒
         if (infoHash != ownData.infoHash) {
-          log.warning("Invalid info hash from {} ({})", address, peerId)
-          self ! Close
-          stay()
+          onError(new IOException("Invalid info hash"))
+          stop()
         } else {
-          log.info("Peer handshake finished: {} (id = {})", address, peerId.utf8String)
-          val newPeerData = PeerData(address, peerId, infoHash)
+          log.info("Peer handshake finished: {} (id = {}, extensions = {})", address, peerId.utf8String, extensions)
+          val newPeerData = PeerData(address, peerId, infoHash, extensions)
           peerDispatcher ! PeerConnected(newPeerData)
-          pushMessage(PeerMessage(PeerMessageId.BITFIELD, BitField(torrent.pieces, ownData.completed)))
+          if (extensions.fast && ownData.completed.isEmpty) {
+            pushMessage(PeerMessage(PeerMessageId.HAVE_NONE))
+          } else {
+            pushMessage(PeerMessage(PeerMessageId.BITFIELD, BitField(torrent.pieces, ownData.completed)))
+          }
           stay() using PeerContext(Nil, Nil, ownData, newPeerData)
         }
 
@@ -176,7 +218,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
     pf.orElse(stateMessage)
   }
 
-  when(Downloading, 15 seconds) {
+  when(Downloading, 5 seconds) {
     val pf: StateFunction = {
       case Event(request @ PieceBlockRequest(index, offset, length), ctx @ PeerContext(queue, _, ownData, peerData)) ⇒
         if (ownData.completed(index)) {
@@ -203,6 +245,12 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
               handler ! DownloadedBlock(index, offset, data)
           }
         }
+        download(ctx, keep)
+
+      case Event(RejectMsg(PieceBlockRequest(index, offset, length)), ctx @ PeerContext(queue, _, ownData, peerData)) if peerData.extensions.fast ⇒
+        log.debug("Rejected: {}/{}/{}", index, offset, length)
+        val (drop, keep) = queue.partition(q ⇒ q.index == index && q.offset == offset && q.length == length)
+        drop.foreach(_.handler ! BlockDownloadFailed(index, offset, length))
         download(ctx, keep)
 
       case Event(CancelBlockDownload(index, offset, length), ctx @ PeerContext(queue, _, ownData, peerData)) ⇒

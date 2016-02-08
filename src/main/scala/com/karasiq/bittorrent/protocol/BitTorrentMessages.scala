@@ -1,11 +1,12 @@
 package com.karasiq.bittorrent.protocol
 
 import akka.util.ByteString
+import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
 
 import scala.collection.BitSet
 
 trait BitTorrentMessages { self: TcpMessageSpecification ⇒
-  case class PeerHandshake(protocol: String, infoHash: ByteString, peerId: ByteString) extends TopLevelMessage {
+  case class PeerHandshake(protocol: String, infoHash: ByteString, peerId: ByteString, extensions: PeerExtensions = PeerExtensions.default) extends TopLevelMessage {
     require(infoHash.length == 20)
     require(peerId.length == 20)
   }
@@ -26,7 +27,7 @@ trait BitTorrentMessages { self: TcpMessageSpecification ⇒
 
   case class PieceBlock(index: Int, offset: Int, data: ByteString)
 
-  case class HavePiece(index: Int)
+  case class PieceIndex(index: Int)
 
   case class BitField(pieces: Int, completed: BitSet)
 

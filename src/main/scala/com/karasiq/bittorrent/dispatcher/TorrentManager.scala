@@ -17,7 +17,7 @@ import scala.language.postfixOps
 
 case class CreateDispatcher(torrent: TorrentMetadata)
 case class RequestDispatcher(infoHash: ByteString)
-case class PeerDispatcherData(torrent: TorrentMetadata, actorRef: ActorRef, state: PeerData)
+case class PeerDispatcherData(torrent: TorrentMetadata, actorRef: ActorRef, state: SeedData)
 
 class TorrentManager extends Actor with ActorLogging {
   private implicit val ec = context.dispatcher
@@ -70,7 +70,7 @@ object TorrentManager {
         .via(PeerConnection.messageFlow)
         .prefixAndTail(1)
         .initialTimeout(10 seconds)
-        .mapAsync(1) { case (Seq(hs @ PeerHandshake(_, infoHash, _)), messages) ⇒
+        .mapAsync(1) { case (Seq(hs @ PeerHandshake(_, infoHash, _, _)), messages) ⇒
           (manager ? RequestDispatcher(infoHash)).mapTo[PeerDispatcherData].zip(Future.successful(Source.single(hs).concat(messages)))
         }
         .flatMapConcat { case (PeerDispatcherData(torrent, dispatcher, ownData), messages) ⇒

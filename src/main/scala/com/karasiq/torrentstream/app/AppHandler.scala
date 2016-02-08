@@ -9,58 +9,39 @@ import akka.stream.scaladsl.Source
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 import akka.util.ByteString
 import boopickle.Default._
-import com.karasiq.bittorrent.format.{TorrentFileInfo, TorrentMetadata, TorrentPiece}
+import com.karasiq.bittorrent.format.TorrentMetadata
 import com.karasiq.bittorrent.streams.TorrentSource
+import com.karasiq.torrentstream.{FileOffset, TorrentStreamingStage}
 import org.apache.commons.codec.binary.Hex
 import org.apache.commons.io.FilenameUtils
 
 class AppHandler(torrentManager: ActorRef, store: TorrentStore)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) extends AppSerializers {
+  private val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
+  private val bufferSize = config.getInt("buffer-size")
+
   // Extracts `Range` header value
   private def extractOffsets(torrent: TorrentMetadata): Directive1[Vector[(Long, Long)]] = {
     optionalHeaderValueByType[Range]().map {
       case Some(ranges) ⇒
-        ranges.ranges.map(r ⇒ r.getSliceFirst().getOrElse(0L).asInstanceOf[Long] → r.getSliceLast().getOrElse(torrent.size).asInstanceOf[Long]).toVector
+        ranges.ranges.map(r ⇒ r.getSliceFirst().orElse(r.getOffset()).getOrElse(0L).asInstanceOf[Long] → r.getSliceLast().getOrElse(torrent.size).asInstanceOf[Long]).toVector
       case None ⇒
         Vector.empty[(Long, Long)]
     }
   }
 
-  private def createTorrentStream(torrent: TorrentMetadata, file: String, offsets: Seq[(Long, Long)]): Directive[(Long, Source[ByteString, Unit])] = {
-    def pieceInRange(index: Int, ranges: Seq[(Long, Long)]): Boolean = {
-      val pieceStart = index.toLong * torrent.files.pieceLength
-      val pieceEnd = pieceStart + torrent.files.pieceLength
-      ranges.exists {
-        case (start, end) ⇒
-          start <= pieceEnd && end >= pieceStart
-      }
+  private def createTorrentStream(torrent: TorrentMetadata, fileName: String, offsets: Seq[(Long, Long)]): Directive[(Long, Source[ByteString, Unit])] = {
+    val file = torrent.files.files.find(_.name == fileName).getOrElse(torrent.files.files.head)
+    val pieces = if (offsets.nonEmpty) {
+      FileOffset.absoluteOffsets(torrent, offsets.map(o ⇒ FileOffset(file, o._1, o._2)))
+    } else {
+      FileOffset.file(torrent, file)
     }
-
-    val pieces = TorrentPiece.sequence(torrent.files).zipWithIndex.collect {
-      case (piece @ TorrentPiece(_, _, TorrentFileInfo(name, _)), index) if name == file ⇒
-        piece → index
-    }
-    val fileOffset = pieces.headOption.map(_._2.toLong * torrent.files.pieceLength).getOrElse(0L)
-
-    val absoluteOffsets = offsets.map(ofs ⇒ (ofs._1 + fileOffset) → (ofs._2 + fileOffset))
-
-    val size = if (absoluteOffsets.isEmpty) torrent.size else absoluteOffsets.foldLeft(0L) {
-      case (result, (start, end)) ⇒
-        result + (end - start)
-    }
-
-    val selectedPieces = pieces.filter(p ⇒ absoluteOffsets.isEmpty || pieceInRange(p._2, absoluteOffsets)).toVector
     val source = Source.single(torrent)
       .via(TorrentSource.dispatcher(torrentManager))
-      .flatMapConcat(dsp ⇒ TorrentSource.pieces(dsp.actorRef, selectedPieces))
-      .buffer(100, OverflowStrategy.backpressure)
-      .map(_.data)
-//      .transform(() ⇒ new TorrentStreamingStage(torrent.files.pieceLength, if (absoluteOffsets.nonEmpty) absoluteOffsets else {
-//        val start = pieces.head._2.toLong * torrent.files.pieceLength
-//        val end = pieces.last._2.toLong * torrent.files.pieceLength + pieces.last._1.size
-//        Seq(start → end)
-//      }))
-
-    tprovide(size, source)
+      .flatMapConcat(dsp ⇒ TorrentSource.pieces(dsp.actorRef, pieces.pieces.toVector))
+      .buffer(bufferSize, OverflowStrategy.backpressure)
+      .transform(() ⇒ new TorrentStreamingStage(torrent.files.pieceLength, pieces.offsets))
+    tprovide(pieces.size, source)
   }
 
   val route = {
@@ -89,7 +70,7 @@ class AppHandler(torrentManager: ActorRef, store: TorrentStore)(implicit actorSy
             case Some(torrent) ⇒
               onSuccess(store.add(torrent)) {
                 extractLog { log ⇒
-                  log.info(s"Torrent uploaded: {} {}", torrent.name, torrent.infoHashString)
+                  log.info(s"Torrent uploaded: {} {}", torrent.files.name, torrent.infoHashString)
                   complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
                 }
               }

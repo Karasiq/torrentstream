@@ -6,10 +6,10 @@ import com.karasiq.bittorrent.dispatcher.DownloadedPiece
 
 import scala.annotation.tailrec
 
-class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[(Long, Long)]) extends PushPullStage[DownloadedPiece, ByteString] {
-  private var currentRange: (Long, Long) = ranges.head
+private[torrentstream] class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[FileOffset]) extends PushPullStage[DownloadedPiece, ByteString] {
+  private var currentRange: FileOffset = ranges.head
 
-  private var currentOffset: Long = currentRange._1
+  private var currentOffset: Long = currentRange.start
 
   private var buffer = Seq.empty[DownloadedPiece]
 
@@ -21,17 +21,18 @@ class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[(Long, Lon
 
   @tailrec
   private def deliverBuffer(ctx: Context[ByteString]): SyncDirective = buffer match {
-    case Seq(DownloadedPiece(index, data), rest @ _*) if (index * pieceLength) <= currentOffset ⇒
+    case Seq(DownloadedPiece(index, data), rest @ _*) if (index.toLong * pieceLength) <= currentOffset ⇒
       val pieceOffset = (currentOffset - (index * pieceLength)).toInt
-      val chunkLength = Seq(data.length.toLong - pieceOffset, currentRange._2 - currentOffset).min.toInt
+      val chunkLength = Seq(data.length.toLong - pieceOffset, currentRange.end - currentOffset).min.toInt
+      require(chunkLength > 0)
       buffer = rest
       currentOffset += chunkLength
       val chunk = data.slice(pieceOffset, pieceOffset + chunkLength)
-      if (currentOffset >= currentRange._2) {
+      if (currentOffset >= currentRange.end) {
         if (ranges.tail.nonEmpty) {
           currentRange = ranges.tail.head
           ranges = ranges.tail
-          currentOffset = currentRange._1
+          currentOffset = currentRange.start
           ctx.push(chunk)
           deliverBuffer(ctx)
         } else {
@@ -50,9 +51,7 @@ class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[(Long, Lon
   }
 
   override def onPush(elem: DownloadedPiece, ctx: Context[ByteString]): SyncDirective = {
-    if ((elem.pieceIndex * pieceLength) + elem.data.length > currentOffset) {
-      buffer :+= elem
-    }
+    buffer = (buffer :+ elem).sortBy(_.pieceIndex)
     deliverBuffer(ctx)
   }
 
