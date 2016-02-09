@@ -8,7 +8,24 @@ import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
 import scala.collection.BitSet
 import scala.util.Try
 
+object BitTorrentTcpProtocol {
+  implicit class ByteBufferOps(val bb: ByteBuffer) extends AnyVal {
+    def getByteString(size: Int): ByteString = {
+      val array = new Array[Byte](Seq(size, bb.remaining()).min)
+      bb.get(array)
+      ByteString(array)
+    }
+
+    def getByteInt: Int = {
+      val byte = bb.get()
+      BigInt(ByteString(0, 0, 0, byte).toArray).intValue()
+    }
+  }
+}
+
 trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
+  import BitTorrentTcpProtocol._
+
   implicit object PeerHandshakeTcpProtocol extends TcpMessageProtocol[PeerHandshake] {
     override def toBytes(ph: PeerHandshake): ByteString = {
       val protocolBytes = ph.protocol.toCharArray.map(_.toByte)
@@ -26,17 +43,13 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
     override def fromBytes(bs: ByteString): Option[PeerHandshake] = {
       Try {
         val buffer = bs.toByteBuffer
-        val length = buffer.get().toInt
-        assert(length == buffer.remaining() - 48)
-        val protocol = new Array[Byte](length)
-        buffer.get(protocol)
-        val reserved = new Array[Byte](8)
-        buffer.get(reserved)
-        val infoHash = new Array[Byte](20)
-        buffer.get(infoHash)
-        val id = new Array[Byte](20)
-        buffer.get(id)
-        PeerHandshake(new String(protocol, "ASCII"), ByteString(infoHash), ByteString(id), PeerExtensions.fromBytes(reserved))
+        val length = buffer.getByteInt
+        assert(length <= buffer.remaining() - 48)
+        val protocol = buffer.getByteString(length)
+        val reserved = buffer.getByteString(8)
+        val infoHash = buffer.getByteString(20)
+        val id = buffer.getByteString(20)
+        PeerHandshake(new String(protocol.toArray, "ASCII"), infoHash, id, PeerExtensions.fromBytes(reserved.toArray))
       }.toOption
     }
   }
@@ -57,7 +70,7 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
         val buffer = bs.toByteBuffer
         val length = buffer.getInt
         assert(length > 0 && buffer.remaining() >= length, "Buffer underflow")
-        val id = buffer.get().toInt
+        val id = buffer.getByteInt
         PeerMessage(id, length, ByteString(buffer).take(length - 1))
       }.toOption
     }

@@ -33,5 +33,5 @@ trait BitTorrentMessages { self: TcpMessageSpecification ⇒
 
   case class Port(port: Int)
 
-  case object KeepAlive
+  case object KeepAlive extends TopLevelMessage
 }

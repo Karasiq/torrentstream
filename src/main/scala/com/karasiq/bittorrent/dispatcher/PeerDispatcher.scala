@@ -9,8 +9,8 @@ import akka.stream.scaladsl.{Tcp, _}
 import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
 import com.karasiq.bittorrent.format.Torrent
-import com.karasiq.bittorrent.protocol.PeerMessages
 import com.karasiq.bittorrent.protocol.PeerMessages.{PeerHandshake, PieceBlockRequest}
+import com.karasiq.bittorrent.protocol.{PeerMessages, PeerStreamEncryption}
 
 import scala.collection.{BitSet, mutable}
 import scala.concurrent.duration._
@@ -71,6 +71,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
 
   override def receive: Receive = {
     case request: TrackerRequest ⇒
+      val self = context.self
       import akka.pattern.ask
       import context.system
       implicit val timeout = Timeout(30 seconds)
@@ -145,13 +146,17 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       log.info("Connecting to: {}", address)
       val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
       val flow = Flow.fromGraph(GraphDSL.create() { implicit b ⇒
+        import GraphDSL.Implicits._
         val messages = b.add(Flow[ByteString].via(PeerConnection.framing).to(Sink.foreach(messageProcessor ! _)))
         val output = b.add(
           Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
             .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
             .keepAlive[ByteString](30 seconds, () ⇒ PeerMessages.KeepAlive)
         )
-        FlowShape(messages.in, output.out)
+        val encryption = b.add(new PeerStreamEncryption(ownData.infoHash)(log))
+        encryption.out1 ~> messages.in
+        output.out ~> encryption.in2
+        FlowShape(encryption.in1, encryption.out2)
       })
       Tcp().outgoingConnection(address).join(flow).run()
 
