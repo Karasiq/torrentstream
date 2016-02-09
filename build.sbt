@@ -1,14 +1,12 @@
 lazy val commonSettings = Seq(
   organization := "com.github.karasiq",
-  isSnapshot := true,
-  version := "1.0.0-SNAPSHOT",
+  isSnapshot := false,
+  version := "1.0.0",
   scalaVersion := "2.11.7"
 )
 
-import com.karasiq.scalajsbundler.compilers.{AssetCompilers, ConcatCompiler}
-import com.karasiq.scalajsbundler.dsl.{Script, _}
-lazy val backendSettings = Seq(
-  name := "torrentstream",
+lazy val librarySettings = Seq(
+  name := "bittorrent",
   libraryDependencies ++= {
     val akkaV = "2.4.1"
     Seq(
@@ -18,20 +16,46 @@ lazy val backendSettings = Seq(
       "com.typesafe.akka" %% "akka-http-experimental" % "2.0.3",
       "commons-codec" % "commons-codec" % "1.8",
       "commons-io" % "commons-io" % "2.4",
-      "com.github.karasiq" %% "mapdbutils" % "1.1.1",
-      "org.mapdb" % "mapdb" % "2.0-beta12",
-      "me.chrons" %% "boopickle" % "1.1.2",
       "org.parboiled" %% "parboiled" % "2.1.1",
       "org.bouncycastle" % "bcprov-jdk15on" % "1.52",
       "org.bouncycastle" % "bcpkix-jdk15on" % "1.52"
     )
   },
+  publishMavenStyle := true,
+  publishTo := {
+    val nexus = "https://oss.sonatype.org/"
+    if (isSnapshot.value)
+      Some("snapshots" at nexus + "content/repositories/snapshots")
+    else
+      Some("releases" at nexus + "service/local/staging/deploy/maven2")
+  },
+  publishArtifact in Test := false,
+  pomIncludeRepository := { _ ⇒ false },
+  licenses := Seq("Apache License, Version 2.0" → url("http://opensource.org/licenses/Apache-2.0")),
+  homepage := Some(url("https://github.com/Karasiq/torrentstream")),
+  pomExtra := <scm>
+    <url>git@github.com:Karasiq/torrentstream.git</url>
+    <connection>scm:git:git@github.com:Karasiq/torrentstream.git</connection>
+  </scm>
+    <developers>
+      <developer>
+        <id>karasiq</id>
+        <name>Piston Karasiq</name>
+        <url>https://github.com/Karasiq</url>
+      </developer>
+    </developers>
+)
+
+import com.karasiq.scalajsbundler.dsl.{Script, _}
+lazy val backendSettings = Seq(
+  name := "torrentstream",
+  libraryDependencies ++= Seq(
+    "com.github.karasiq" %% "mapdbutils" % "1.1.1",
+    "org.mapdb" % "mapdb" % "2.0-beta12",
+    "me.chrons" %% "boopickle" % "1.1.2"
+  ),
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main"),
-  scalaJsBundlerCompilers in Compile := AssetCompilers {
-    case Mimes.javascript ⇒
-      ConcatCompiler
-  }.<<=(AssetCompilers.default),
-  scalaJsBundlerCompile in Compile <<= (scalaJsBundlerCompile in Compile).dependsOn(fastOptJS in Compile in frontend),
+  scalaJsBundlerCompile in Compile <<= (scalaJsBundlerCompile in Compile).dependsOn(fullOptJS in Compile in frontend),
   scalaJsBundlerAssets in Compile += {
     Bundle("index",
       // Static
@@ -51,7 +75,7 @@ lazy val backendSettings = Seq(
       Static("fonts/glyphicons-halflings-regular.woff2") from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular.woff2"),
 
       // Scala.js app
-      Script from file("frontend") / "target" / "scala-2.11" / "torrentstream-frontend-fastopt.js",
+      Script from file("frontend") / "target" / "scala-2.11" / "torrentstream-frontend-opt.js",
       Script from file("frontend") / "target" / "scala-2.11" / "torrentstream-frontend-launcher.js"
     )
   }
@@ -66,7 +90,11 @@ lazy val frontendSettings = Seq(
   )
 )
 
+lazy val library = Project("bittorrent", file("library"))
+  .settings(commonSettings, librarySettings)
+
 lazy val backend = Project("torrentstream", file("."))
+  .dependsOn(library)
   .settings(commonSettings, backendSettings)
   .enablePlugins(ScalaJSBundlerPlugin, JavaAppPackaging)
 

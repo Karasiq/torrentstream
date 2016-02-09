@@ -18,6 +18,7 @@ import scala.scalajs.js.typedarray.{ArrayBuffer, TypedArrayBuffer}
 import scala.util.{Failure, Success}
 import scalatags.JsDom.all._
 
+// TODO: M3U generation, uploaded torrent catalog
 class TorrentUploadForm(implicit ctx: Ctx.Owner) extends BootstrapHtmlComponent[scalajs.dom.html.Element] {
   private def readBinary[T: Pickler](xhr: XMLHttpRequest): T = {
     Unpickle[T].fromBytes(TypedArrayBuffer.wrap(xhr.response.asInstanceOf[ArrayBuffer]))

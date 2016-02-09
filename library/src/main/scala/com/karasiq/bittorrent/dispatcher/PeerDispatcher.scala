@@ -92,14 +92,14 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       }
 
     case request @ RequestPeers(index, count) if (0 until torrent.pieces).contains(index) ⇒
-      idleSchedule.cancel()
-      idleSchedule = scheduleIdleStop()
       val result = peers.collect {
         case (peer, data) if data.completed(index) && !data.chokedBy ⇒
           peer
       }.toSeq.sortBy(demand).take(count)
 
       if (result.nonEmpty) {
+        idleSchedule.cancel()
+        idleSchedule = scheduleIdleStop()
         result.foreach(peer ⇒ demand += peer → (demand(peer) + 1))
         sender() ! PeerList(result)
       } else {

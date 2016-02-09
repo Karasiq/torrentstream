@@ -26,5 +26,9 @@ object Main extends App {
 
   val torrentManager = actorSystem.actorOf(TorrentManager.props)
   val handler = new AppHandler(torrentManager, store)
-  Http().bindAndHandle(handler.route, "localhost", 8901)
+  val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.http-server")
+  val host = config.getString("host")
+  val port = config.getInt("port")
+  actorSystem.log.info("Torrent streaming server started on http://{}:{}", host, port)
+  Http().bindAndHandle(handler.route, host, port)
 }

@@ -52,10 +52,14 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(imp
         (path("upload") & entity(as[ByteString])) { data ⇒
           Torrent.decode(data) match {
             case Some(torrent) ⇒
-              onSuccess(store.add(torrent)) {
-                extractLog { log ⇒
-                  log.info(s"Torrent uploaded: {} {}", torrent.data.name, torrent.infoHashString)
-                  complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
+              if (store.contains(torrent.infoHash)) {
+                complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
+              } else {
+                onSuccess(store.add(torrent)) {
+                  extractLog { log ⇒
+                    log.info(s"Torrent uploaded: {} {}", torrent.data.name, torrent.infoHashString)
+                    complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
+                  }
                 }
               }
 

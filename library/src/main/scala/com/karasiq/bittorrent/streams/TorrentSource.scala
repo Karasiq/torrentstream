@@ -17,7 +17,6 @@ object TorrentSource {
     val size = blocks.map(_.size).sum
     Source
       .actorPublisher[DownloadedBlock](PeerBlockPublisher.props(peerDispatcher, size))
-      .log("block-loader")
       .mapMaterializedValue(loader ⇒ blocks.foreach(block ⇒ loader ! PieceBlockRequest(index, block.offset, block.size)))
       .take(blocks.length)
       .fold(ByteString.empty)((bs, block) ⇒ bs ++ block.data)
@@ -26,7 +25,6 @@ object TorrentSource {
   private def pieceSource(dispatcher: ActorRef, piece: TorrentPiece): Source[DownloadedPiece, ActorRef] = {
     Source
       .actorPublisher[DownloadedPiece](PeerPiecePublisher.props(dispatcher, PieceDownloadRequest(piece)))
-      .log("piece-loader")
   }
 
   def pieces(dispatcher: ActorRef, pcs: Vector[TorrentPiece]): Source[DownloadedPiece, Unit] = {
