@@ -3,4 +3,6 @@ scala:
   - 2.11.7
 jdk:
   - oraclejdk8
+script:
+ - sbt ++$TRAVIS_SCALA_VERSION bittorrent/test
 sudo: false
