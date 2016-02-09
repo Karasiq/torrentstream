@@ -5,16 +5,16 @@ import akka.util.ByteString
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 
-case class TorrentPiece(index: Int, size: Int, sha1: ByteString, file: TorrentFileInfo)
-case class TorrentPieceBlock(piece: Int, offset: Int, size: Int)
+case class TorrentPiece(index: Int, size: Int, sha1: ByteString, file: TorrentFile)
+case class TorrentPieceBlock(piece: TorrentPiece, offset: Int, size: Int)
 
 object TorrentPiece {
-  def sequence(files: TorrentFiles): IndexedSeq[TorrentPiece] = {
+  def pieces(files: TorrentFiles): IndexedSeq[TorrentPiece] = {
     // Total torrent size
     val totalSize = files.files.map(_.size).sum
 
     @tailrec
-    def pieceSequenceRec(buffer: ArrayBuffer[TorrentPiece], offset: Long, fileOffset: Long, pieceIndex: Int, fileSeq: Seq[TorrentFileInfo]): IndexedSeq[TorrentPiece] = fileSeq match {
+    def pieceSequenceRec(buffer: ArrayBuffer[TorrentPiece], offset: Long, fileOffset: Long, pieceIndex: Int, fileSeq: Seq[TorrentFile]): IndexedSeq[TorrentPiece] = fileSeq match {
       case Seq(currentFile, fs @ _*) if fs.nonEmpty && fileOffset >= currentFile.size ⇒
         pieceSequenceRec(buffer, offset, 0L, pieceIndex, fs)
 
@@ -37,7 +37,7 @@ object TorrentPiece {
       if (offset >= piece.size) {
         buffer.result()
       } else {
-        val block = TorrentPieceBlock(piece.index, offset, Seq(sizeLimit, piece.size - offset).min)
+        val block = TorrentPieceBlock(piece, offset, Seq(sizeLimit, piece.size - offset).min)
         pieceBlockRec(buffer :+ block, offset + block.size)
       }
     }

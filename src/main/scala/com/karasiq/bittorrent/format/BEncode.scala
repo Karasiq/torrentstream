@@ -6,6 +6,7 @@ import org.parboiled2._
 sealed trait BEncodedValue {
   def toBytes: ByteString
 }
+
 case class BEncodedString(bytes: ByteString) extends BEncodedValue {
   override def toBytes: ByteString = {
     ByteString(bytes.length.toString + ":") ++ bytes
@@ -13,16 +14,19 @@ case class BEncodedString(bytes: ByteString) extends BEncodedValue {
 
   def utf8String: String = bytes.utf8String
 }
+
 case class BEncodedNumber(number: Long) extends BEncodedValue {
   override def toBytes: ByteString = {
     ByteString("i") ++ ByteString(number.toString) ++ ByteString("e")
   }
 }
+
 case class BEncodedArray(values: Seq[BEncodedValue]) extends BEncodedValue {
   override def toBytes: ByteString = {
     ByteString("l") ++ values.map(_.toBytes).fold(ByteString.empty)(_ ++ _) ++ ByteString("e")
   }
 }
+
 case class BEncodedDictionary(values: Seq[(String, BEncodedValue)]) extends BEncodedValue {
   override def toBytes: ByteString = {
     ByteString("d") ++ values.map(kv ⇒ BEncodedString(ByteString(kv._1.toCharArray.map(_.toByte))).toBytes ++ kv._2.toBytes).fold(ByteString.empty)(_ ++ _) ++ ByteString("e")
@@ -107,9 +111,14 @@ object BEncodeImplicits {
         bs
     }
 
-    def number(key: String): Option[Long] = dict.get(key).collect {
+    def long(key: String): Option[Long] = dict.get(key).collect {
       case BEncodedNumber(num) ⇒
         num
+    }
+
+    def int(key: String): Option[Int] = dict.get(key).collect {
+      case BEncodedNumber(num) ⇒
+        num.toInt
     }
 
     def array(key: String): Seq[BEncodedValue] = dict.get(key).map(_.asArray).getOrElse(Nil)

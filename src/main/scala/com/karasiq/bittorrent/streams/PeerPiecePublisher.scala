@@ -2,7 +2,7 @@ package com.karasiq.bittorrent.streams
 
 import java.security.MessageDigest
 
-import akka.actor.{Actor, ActorLogging, ActorRef}
+import akka.actor.{Actor, ActorLogging, ActorRef, Props}
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl.{ImplicitMaterializer, Sink}
@@ -13,9 +13,13 @@ import com.karasiq.bittorrent.format.TorrentPiece
 import scala.language.postfixOps
 import scala.util.{Failure, Success}
 
-case class PieceFrom(source: ActorRef, data: DownloadedPiece)
+object PeerPiecePublisher {
+  def props(peerDispatcher: ActorRef, request: PieceDownloadRequest): Props = {
+    Props(classOf[PeerPiecePublisher], peerDispatcher, request)
+  }
+}
 
-class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef) extends Actor with ActorLogging with ActorPublisher[DownloadedPiece] with ImplicitMaterializer {
+class PeerPiecePublisher(peerDispatcher: ActorRef, request: PieceDownloadRequest) extends Actor with ActorLogging with ActorPublisher[DownloadedPiece] with ImplicitMaterializer {
   private val blockSize = context.system.settings.config.getInt("karasiq.torrentstream.peer-load-balancer.block-size")
   private var piece: Option[DownloadedPiece] = None
 
@@ -35,14 +39,8 @@ class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef
     case PieceDownloadRequest(TorrentPiece(index, _, _, _)) if this.piece.isEmpty ⇒
       log.info("Requesting piece #{}", index)
       TorrentSource.pieceBlocks(peerDispatcher, index, request.piece, blockSize)
-        .alsoTo(Sink.onComplete {
-          case Success(_) ⇒
-            // Nothing
-
-          case Failure(exc) ⇒
-            context.stop(self)
-        })
-        .runWith(Sink.foreach(data ⇒ self ! DownloadedPiece(index, data)))
+        .map(data ⇒ DownloadedPiece(index, data))
+        .runWith(Sink.actorRef(self, Success(null)))
 
     case piece @ DownloadedPiece(index, data) if this.piece.isEmpty ⇒
       if (checkHash(data, request.piece.sha1)) {
@@ -55,6 +53,9 @@ class PeerPiecePublisher(request: PieceDownloadRequest, peerDispatcher: ActorRef
         log.warning(s"Invalid piece #$index")
         self ! request
       }
+
+    case Failure(exc) ⇒
+      onErrorThenStop(exc)
 
     case Request(_) ⇒
       if (piece.isDefined) {

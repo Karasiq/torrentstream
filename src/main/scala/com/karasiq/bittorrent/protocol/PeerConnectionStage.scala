@@ -1,4 +1,4 @@
-package com.karasiq.bittorrent.dispatcher
+package com.karasiq.bittorrent.protocol
 
 import java.io.IOException
 
@@ -8,7 +8,7 @@ import com.karasiq.bittorrent.protocol.PeerMessages._
 
 import scala.annotation.tailrec
 
-class PeerConnectionStage(maxBufferSize: Int) extends PushPullStage[ByteString, TopLevelMessage] with PeerMessageMatcher {
+private[bittorrent] class PeerConnectionStage(maxBufferSize: Int) extends PushPullStage[ByteString, TopLevelMessage] with PeerMessageMatcher {
   private var handshake = true
   private var buffer = ByteString.empty
 

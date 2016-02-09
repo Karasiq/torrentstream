@@ -24,7 +24,7 @@ object TrackerResponse {
           for {
             id <- Some(peer.string("peer id"))
             ip <- peer.string("ip")
-            port <- peer.number("port")
+            port <- peer.long("port")
           } yield TrackerPeer(id, InetSocketAddress.createUnresolved(ip, port.toInt))
       }.flatten
 
@@ -50,21 +50,17 @@ object TrackerResponse {
     data match {
       case Seq(BEncodedDictionary(values)) ⇒
         val map = values.toMap
-        val error = map.string("failure reason")
-        if (error.isDefined) {
-          Left(TrackerError(s"Tracker error: ${error.get}"))
-        } else {
-          val response = for {
-            warning <- Some(map.string("warning message"))
-            interval <- map.number("interval")
-            minInterval <- Some(map.number("min interval").map(_.toInt))
-            trackerId <- Some(map.string("tracker id"))
-            complete <- Some(map.number("complete").map(_.toInt))
-            incomplete <- Some(map.number("incomplete").map(_.toInt))
-            peers <- map.get("peers").collect(parsePeers)
-          } yield TrackerResponse(warning, interval.toInt, minInterval, trackerId, complete, incomplete, peers)
+        map.string("failure reason") match {
+          case Some(error) ⇒
+            Left(TrackerError(s"Tracker error: $error"))
 
-          response.fold[Either[TrackerError, TrackerResponse]](Left(TrackerError("Invalid response")))(Right.apply)
+          case None ⇒
+            val response = for {
+              interval <- map.int("interval")
+              peers <- map.get("peers").collect(parsePeers)
+            } yield TrackerResponse(map.string("warning message"), interval, map.int("min interval"), map.string("tracker id"), map.int("complete"), map.int("incomplete"), peers)
+
+            response.fold[Either[TrackerError, TrackerResponse]](Left(TrackerError("Invalid response")))(Right.apply)
         }
 
       case _ ⇒

@@ -12,17 +12,12 @@ lazy val backendSettings = Seq(
   libraryDependencies ++= {
     val akkaV = "2.4.1"
     Seq(
-      "com.github.karasiq" %% "commons" % "1.0.3",
-      "com.github.karasiq" %% "commons-akka" % "1.0.3",
       "com.typesafe.akka" %% "akka-actor" % akkaV,
-      "net.codingwell" %% "scala-guice" % "4.0.1",
       "org.scalatest" %% "scalatest" % "2.2.4" % "test",
       "com.typesafe.akka" %% "akka-stream-experimental" % "2.0.3",
       "com.typesafe.akka" %% "akka-http-experimental" % "2.0.3",
       "commons-codec" % "commons-codec" % "1.8",
       "commons-io" % "commons-io" % "2.4",
-      "org.simpleframework" % "simple" % "4.1.21",
-      "org.slf4j" % "slf4j-log4j12" % "1.6.4",
       "com.github.karasiq" %% "mapdbutils" % "1.1.1",
       "org.mapdb" % "mapdb" % "2.0-beta12",
       "me.chrons" %% "boopickle" % "1.1.2",

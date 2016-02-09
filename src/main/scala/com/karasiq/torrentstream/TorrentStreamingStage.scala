@@ -6,8 +6,8 @@ import com.karasiq.bittorrent.dispatcher.DownloadedPiece
 
 import scala.annotation.tailrec
 
-private[torrentstream] class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[FileOffset]) extends PushPullStage[DownloadedPiece, ByteString] {
-  private var currentRange: FileOffset = ranges.head
+private[torrentstream] class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[TorrentFileOffset]) extends PushPullStage[DownloadedPiece, ByteString] {
+  private var currentRange: TorrentFileOffset = ranges.head
 
   private var currentOffset: Long = currentRange.start
 

@@ -1,5 +1,6 @@
 package com.karasiq.bittorrent.protocol.extensions
 
+// TODO: Extension message protocol
 case class PeerExtensions(fast: Boolean = true) {
   def toBytes: Array[Byte] = {
     val array = new Array[Byte](8)

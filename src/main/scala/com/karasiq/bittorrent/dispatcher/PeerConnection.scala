@@ -3,16 +3,16 @@ package com.karasiq.bittorrent.dispatcher
 import java.io.IOException
 import java.net.InetSocketAddress
 
-import akka.actor.{ActorRef, FSM}
+import akka.actor.{ActorRef, FSM, Props}
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
 import com.karasiq.bittorrent.dispatcher.PeerConnectionState._
-import com.karasiq.bittorrent.format.TorrentMetadata
+import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.protocol.PeerMessages._
-import com.karasiq.bittorrent.protocol.{PeerMessageId, TcpMessageWriter}
+import com.karasiq.bittorrent.protocol.{PeerConnectionStage, PeerMessageId, TcpMessageWriter}
 
 import scala.annotation.tailrec
 import scala.collection.BitSet
@@ -29,8 +29,6 @@ case class PeerDisconnected(data: PeerData) extends PeerEvent
 sealed trait PeerConnectionState
 object PeerConnectionState {
   case object Idle extends PeerConnectionState
-  case object Connecting extends PeerConnectionState
-  case object ConnectionEstablished extends PeerConnectionState
   case object Downloading extends PeerConnectionState
 }
 
@@ -44,7 +42,7 @@ object PeerConnectionContext {
 }
 
 // TODO: Encryption, DHT, UDP
-class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAddress: InetSocketAddress, initData: SeedData) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with ImplicitMaterializer with PeerMessageMatcher {
+class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: InetSocketAddress, initData: SeedData) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with ImplicitMaterializer with PeerMessageMatcher {
   import context.system
 
   // Settings
@@ -54,7 +52,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
 
   private var messageBuffer = Vector.empty[ByteString]
 
-  startWith(ConnectionEstablished, HandshakeContext(peerAddress, initData))
+  startWith(Idle, HandshakeContext(peerAddress, initData))
 
   def stateMessage: StateFunction = {
     case Event(Request(_), _) ⇒
@@ -171,7 +169,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
       stay()
   }
 
-  when(ConnectionEstablished, 10 minutes) {
+  when(Idle, 10 minutes) {
     val pf: StateFunction = {
       case Event(PeerHandshake(protocol, infoHash, peerId, extensions), HandshakeContext(address, ownData)) ⇒
         if (infoHash != ownData.infoHash) {
@@ -272,7 +270,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
         }
         val data = peerData.copy(chokedBy = true)
         peerDispatcher ! PeerStateChanged(data)
-        goto(ConnectionEstablished) using ctx.copy(downloadQueue = Nil)
+        goto(Idle) using ctx.copy(downloadQueue = Nil)
 
       case Event(StateTimeout, ctx @ PeerContext(queue, _, ownData, peerData)) ⇒
         if (queue.nonEmpty) {
@@ -289,7 +287,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
           stop()
         } else {
           log.warning("Connection in downloading state with empty queue: {}", self)
-          goto(ConnectionEstablished)
+          goto(Idle)
         }
 
       case Event(Cancel, PeerContext(queue, _, ownData, peerData)) ⇒
@@ -365,7 +363,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
     if (newQueue.nonEmpty) {
       stay() using ctx.copy(newQueue)
     } else {
-      goto(ConnectionEstablished) using ctx.copy(Nil)
+      goto(Idle) using ctx.copy(Nil)
     }
   }
 
@@ -389,5 +387,13 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: TorrentMetadata, peerAdd
 }
 
 object PeerConnection {
-  def messageFlow = Flow[ByteString].transform(() ⇒ new PeerConnectionStage(131072))
+  def framing: Flow[ByteString, TopLevelMessage, Unit] = {
+    val messageBufferSize: Int = 131072
+    Flow[ByteString]
+      .transform(() ⇒ new PeerConnectionStage(messageBufferSize))
+  }
+
+  def props(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: InetSocketAddress, initData: SeedData): Props = {
+    Props(classOf[PeerConnection], peerDispatcher, torrent, peerAddress, initData)
+  }
 }

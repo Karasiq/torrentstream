@@ -8,7 +8,7 @@ import akka.stream.actor.ActorPublisher
 import akka.stream.scaladsl.{Tcp, _}
 import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
-import com.karasiq.bittorrent.format.TorrentMetadata
+import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.protocol.PeerMessages
 import com.karasiq.bittorrent.protocol.PeerMessages.{PeerHandshake, PieceBlockRequest}
 
@@ -25,7 +25,13 @@ case class RequestPeers(piece: Int, count: Int)
 case class PeerList(peers: Seq[ActorRef])
 case class UpdateBitField(completed: BitSet)
 
-class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
+object PeerDispatcher {
+  def props(torrent: Torrent): Props = {
+    Props(classOf[PeerDispatcher], torrent)
+  }
+}
+
+class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.{dispatcher, system}
   private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
   private val updateBitField = config.getBoolean("update-bitfield")
@@ -137,9 +143,9 @@ class PeerDispatcher(torrent: TorrentMetadata) extends Actor with ActorLogging w
 
     case connect @ ConnectPeer(address) if !peers.exists(_._2.address == address) ⇒
       log.info("Connecting to: {}", address)
-      val messageProcessor = context.actorOf(Props(classOf[PeerConnection], self, torrent, address, ownData))
+      val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
       val flow = Flow.fromGraph(GraphDSL.create() { implicit b ⇒
-        val messages = b.add(Flow[ByteString].via(PeerConnection.messageFlow).to(Sink.foreach(messageProcessor ! _)))
+        val messages = b.add(Flow[ByteString].via(PeerConnection.framing).to(Sink.foreach(messageProcessor ! _)))
         val output = b.add(
           Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
             .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))

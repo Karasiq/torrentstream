@@ -1,6 +1,7 @@
 package com.karasiq.bittorrent.format
 
 import java.io.FileInputStream
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.time.Instant
 
@@ -9,21 +10,19 @@ import com.karasiq.bittorrent.format.BEncodeImplicits._
 import org.apache.commons.codec.binary.Hex
 import org.apache.commons.io.IOUtils
 
-import scala.util.Try
-
-case class TorrentMetadata(infoHash: ByteString, announce: String, announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], files: TorrentFiles) {
-  val size: Long = files.files.map(_.size).sum
-  val pieces: Int = files.pieces.length / 20
+case class Torrent(infoHash: ByteString, announce: String, announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], data: TorrentFiles) {
+  val size: Long = data.files.map(_.size).sum
+  val pieces: Int = data.pieces.length / 20
 
   def infoHashString: String = {
     Hex.encodeHexString(infoHash.toArray).toUpperCase
   }
 }
 
-case class TorrentFiles(name: String, pieceLength: Int, pieces: ByteString, files: Seq[TorrentFileInfo])
-case class TorrentFileInfo(name: String, size: Long)
+case class TorrentFiles(name: String, pieceLength: Int, pieces: ByteString, files: Seq[TorrentFile])
+case class TorrentFile(name: String, size: Long)
 
-object TorrentMetadata {
+object Torrent {
   private def asAnnounceList: PartialFunction[BEncodedValue, Seq[Seq[String]]] = {
     case BEncodedArray(values) ⇒
       values.collect {
@@ -45,32 +44,31 @@ object TorrentMetadata {
           fileList.flatMap {
             case BEncodedDictionary(fileValues) ⇒
               val fileData = fileValues.toMap
-              for (path <- fileData.get("path").collect(asPathSeq); length <- fileData.number("length")) yield {
-                TorrentFileInfo(path, length)
+              for (path <- fileData.get("path").collect(asPathSeq); length <- fileData.long("length")) yield {
+                TorrentFile(path, length)
               }
 
             case _ ⇒
               Nil
           }
       }
-      val length = data.number("length")
       val name = data.string("name")
-      val pieceLength = data.number("piece length")
+      val pieceLength = data.int("piece length")
       val pieces = data.byteString("pieces")
       if (files.isDefined) {
         for {
           name <- name
-          pieceLength <- pieceLength.map(_.toInt)
+          pieceLength <- pieceLength
           pieces <- pieces
           files <- files
         } yield TorrentFiles(name, pieceLength, pieces, files)
       } else {
         for {
           name <- name
-          length <- length
-          pieceLength <- pieceLength.map(_.toInt)
+          length <- data.long("length")
+          pieceLength <- pieceLength
           pieces <- pieces
-        } yield TorrentFiles(name, pieceLength, pieces, Seq(TorrentFileInfo(name, length)))
+        } yield TorrentFiles(name, pieceLength, pieces, Seq(TorrentFile(name, length)))
       }
 
     case _ ⇒
@@ -82,7 +80,7 @@ object TorrentMetadata {
     ByteString(md.digest(v.toBytes.toArray[Byte]))
   }
 
-  def decode(encoded: Seq[BEncodedValue]): Option[TorrentMetadata] = encoded match {
+  def decode(encoded: Seq[BEncodedValue]): Option[Torrent] = encoded match {
     case Seq(BEncodedDictionary(values)) ⇒
       val map = values.toMap
       val announce = map.string("announce")
@@ -90,24 +88,36 @@ object TorrentMetadata {
       val comment = map.string("comment")
       val createdBy = map.string("created by")
       val encoding = map.string("encoding")
-      val date = map.number("creation date").map(Instant.ofEpochSecond)
+      val date = map.long("creation date").map(Instant.ofEpochSecond)
       val info = map.get("info")
       for (announce <- announce.orElse(announceList.flatMap(_.headOption.flatMap(_.headOption))); infoHash <- info.map(infoHash); files <- info.flatMap(filesInfo)) yield {
-        TorrentMetadata(infoHash, announce, announceList.getOrElse(Nil), createdBy, comment, encoding, date, files)
+        Torrent(infoHash, announce, announceList.getOrElse(Nil), createdBy, comment, encoding, date, files)
       }
 
     case _ ⇒
       None
   }
 
-  def apply(data: ByteString): Option[TorrentMetadata] = {
+  def decode(data: ByteString): Option[Torrent] = {
     this.decode(BEncode.parse(data.toArray[Byte]))
   }
 
-  def fromFile(file: String): Option[TorrentMetadata] = {
-    val inputStream = new FileInputStream(file)
-    val result = Try(this.decode(BEncode.parse(IOUtils.toByteArray(inputStream))))
-    IOUtils.closeQuietly(inputStream)
-    result.getOrElse(None)
+  def fromBytes(data: ByteString): Torrent = {
+    this.decode(data).getOrElse(throw new IllegalArgumentException("Invalid torrent format"))
   }
+
+  def fromFile(file: String): Torrent = {
+    val inputStream = new FileInputStream(file)
+    try {
+      this.fromBytes(ByteString(IOUtils.toByteArray(inputStream)))
+    } finally {
+      IOUtils.closeQuietly(inputStream)
+    }
+  }
+
+  def apply(data: ByteString): Torrent = this.fromBytes(data)
+
+  def apply(data: Array[Byte]): Torrent = this.fromBytes(ByteString(data))
+
+  def apply(data: ByteBuffer): Torrent = this.fromBytes(ByteString(data))
 }

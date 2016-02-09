@@ -4,7 +4,7 @@ import java.io.{Closeable, DataInput, DataOutput}
 import java.nio.file.Paths
 
 import akka.util.ByteString
-import com.karasiq.bittorrent.format.TorrentMetadata
+import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.mapdb.serialization.MapDbSerializer
 import com.karasiq.mapdb.serialization.MapDbSerializer.Default._
 import com.karasiq.mapdb.transaction.TxCtx
@@ -15,7 +15,7 @@ import org.mapdb.{BTreeKeySerializer, Serializer}
 
 import scala.concurrent.Future
 
-final class TorrentStore(config: Config) extends Map[ByteString, TorrentMetadata] with Closeable {
+final class TorrentStore(config: Config) extends Map[ByteString, Torrent] with Closeable {
   private implicit val byteStringSerializer = new Serializer[ByteString] {
     private val arraySerializer = MapDbSerializer[Array[Byte]]
 
@@ -40,26 +40,26 @@ final class TorrentStore(config: Config) extends Map[ByteString, TorrentMetadata
 
   private val db = DbProvider()
 
-  private val map = MapDbWrapper(db).createTreeMap[Array[Byte], TorrentMetadata]("torrents")(_
+  private val map = MapDbWrapper(db).createTreeMap[Array[Byte], Torrent]("torrents")(_
     .keySerializer(BTreeKeySerializer.BYTE_ARRAY)
-    .valueSerializer(MapDbSerializer[TorrentMetadata])
+    .valueSerializer(MapDbSerializer[Torrent])
     .nodeSize(32)
     .valuesOutsideNodesEnable()
   )
 
-  override def +[B1 >: TorrentMetadata](kv: (ByteString, B1)): Map[ByteString, B1] = {
+  override def +[B1 >: Torrent](kv: (ByteString, B1)): Map[ByteString, B1] = {
     throw new IllegalArgumentException
   }
 
-  override def -(key: ByteString): Map[ByteString, TorrentMetadata] = {
+  override def -(key: ByteString): Map[ByteString, Torrent] = {
     throw new IllegalArgumentException
   }
 
-  override def get(key: ByteString): Option[TorrentMetadata] = {
+  override def get(key: ByteString): Option[Torrent] = {
     map.get(key.toArray)
   }
 
-  override def iterator: Iterator[(ByteString, TorrentMetadata)] = {
+  override def iterator: Iterator[(ByteString, Torrent)] = {
     map.iterator.map(kv ⇒ ByteString(kv._1) → kv._2)
   }
 
@@ -67,7 +67,7 @@ final class TorrentStore(config: Config) extends Map[ByteString, TorrentMetadata
     map.contains(key.toArray)
   }
 
-  def add(torrent: TorrentMetadata)(implicit tx: TxCtx = db.newTransaction): Future[Unit] = {
+  def add(torrent: Torrent)(implicit tx: TxCtx = db.newTransaction): Future[Unit] = {
     db.scheduleTransaction { implicit tx ⇒
       map += torrent.infoHash.toArray[Byte] → torrent
     }

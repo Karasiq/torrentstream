@@ -4,12 +4,17 @@ import akka.actor._
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import com.karasiq.bittorrent.dispatcher._
-import com.karasiq.bittorrent.protocol.PeerMessages
 import com.karasiq.bittorrent.protocol.PeerMessages.PieceBlockRequest
 
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.language.postfixOps
+
+object PeerBlockPublisher {
+  def props(peerDispatcher: ActorRef, pieceSize: Int): Props = {
+    Props(classOf[PeerBlockPublisher], peerDispatcher, pieceSize)
+  }
+}
 
 class PeerBlockPublisher(peerDispatcher: ActorRef, pieceSize: Int) extends Actor with ActorPublisher[DownloadedBlock] with ActorLogging with Stash {
   // Configuration
