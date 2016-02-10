@@ -18,7 +18,7 @@ import org.bouncycastle.jcajce.provider.asymmetric.dh.BCDHPublicKey
 import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.{Random, Try}
+import scala.util.Try
 
 private[protocol] object PeerStreamEncryption {
   private val provider = new org.bouncycastle.jce.provider.BouncyCastleProvider()
@@ -52,12 +52,6 @@ private[protocol] object PeerStreamEncryption {
     val md = MessageDigest.getInstance("SHA-1", provider)
     ByteString(md.digest(data.toArray))
   }
-
-  def randomPadding: ByteString = {
-    val array = new Array[Byte](Random.nextInt(512))
-    Random.nextBytes(array)
-    ByteString(array)
-  }
 }
 
 /**
@@ -68,7 +62,7 @@ private[protocol] object PeerStreamEncryption {
   */
 class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) extends GraphStage[BidiShape[ByteString, ByteString, ByteString, ByteString]] {
   // TODO: Server mode
-  import PeerStreamEncryption.{randomPadding, readKey, sha1}
+  import PeerStreamEncryption.{readKey, sha1}
 
   val tcpInput: Inlet[ByteString] = Inlet("TcpInput")
   val messageInput: Inlet[ByteString] = Inlet("MessageInput")
@@ -86,31 +80,55 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
       val READY = Value
     }
 
-    private var stage = Stage.CLIENT_DH
-    private var rc4Enabled = false
-    private val key = PeerStreamEncryption.generateKey()
-    private val dh = KeyAgreement.getInstance("DH", PeerStreamEncryption.provider)
-    dh.init(key.getPrivate)
+    var stage = Stage.CLIENT_DH
+    var rc4Enabled = false
 
     var messageInputBuffer = Vector.empty[ByteString]
     var tcpInputBuffer = ByteString.empty // Input buffer
+
+    val key = PeerStreamEncryption.generateKey()
+    val dh = KeyAgreement.getInstance("DH", PeerStreamEncryption.provider)
+    dh.init(key.getPrivate)
+
+    val ownRc4Engine = new RC4Engine
+    val peerRc4Engine = new RC4Engine
+    val secureRandom = new SecureRandom(key.getPublic.getEncoded)
+
     var secret = ByteString.empty // Diffie-Hellman shared secret
-    var clientRc4 = new RC4Engine
-    var serverRc4 = new RC4Engine
     val vc = ByteString(0, 0, 0, 0, 0, 0, 0, 0) // Verification constant, 8 bytes
 
-    def rc4(data: ByteString): ByteString = {
-      val input = data.toArray
-      val output = new Array[Byte](data.length)
-      val length = clientRc4.processBytes(input, 0, data.length, output, 0)
-      ByteString(output).take(length)
+    def randomPadding: ByteString = {
+      secureRandom.nextBytes(rc4InBuffer)
+      ByteString(rc4InBuffer).take(secureRandom.nextInt(512))
     }
 
-    def deRc4(data: ByteString): ByteString = {
-      val input = data.toArray
-      val output = new Array[Byte](data.length)
-      val length = serverRc4.processBytes(input, 0, data.length, output, 0)
-      ByteString(output).take(length)
+    val rc4InBuffer = new Array[Byte](1024)
+    val rc4OutBuffer = new Array[Byte](1024)
+
+    def rc4(engine: RC4Engine, data: ByteString): ByteString = {
+      val input = data.toByteBuffer
+      while (input.remaining() > 0) {
+        val length = Seq(input.remaining(), 1024).min
+        input.get(rc4InBuffer, 0, length)
+        engine.processBytes(rc4InBuffer, 0, length, rc4OutBuffer, 0)
+        input.position(input.position() - length)
+        input.put(rc4OutBuffer, 0, length)
+      }
+      input.flip()
+      ByteString(input)
+    }
+
+    def rc4Encrypt(data: ByteString): ByteString = {
+      rc4(ownRc4Engine, data)
+    }
+
+    def rc4Decrypt(data: ByteString): ByteString = {
+      rc4(peerRc4Engine, data)
+    }
+
+    def resetRc4(engine: RC4Engine): Unit = {
+      engine.reset()
+      engine.processBytes(rc4InBuffer, 0, 1024, rc4OutBuffer, 0)
     }
 
     def sendPublicKey(): Unit = {
@@ -136,10 +154,10 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
             }
             dh.doPhase(bKey, true)
             secret = ByteString(dh.generateSecret())
-            clientRc4.init(true, new KeyParameter(sha1(ByteString("keyA") ++ secret ++ infoHash).toArray))
-            serverRc4.init(false, new KeyParameter(sha1(ByteString("keyB") ++ secret ++ infoHash).toArray))
-            (1 to 1024).foreach(_ ⇒ clientRc4.returnByte(0))
-            (1 to 1024).foreach(_ ⇒ serverRc4.returnByte(0))
+            ownRc4Engine.init(true, new KeyParameter(sha1(ByteString("keyA") ++ secret ++ infoHash).toArray))
+            peerRc4Engine.init(false, new KeyParameter(sha1(ByteString("keyB") ++ secret ++ infoHash).toArray))
+            resetRc4(ownRc4Engine)
+            resetRc4(peerRc4Engine)
             val hash1 = sha1(ByteString("req1") ++ secret)
             val hash2 = {
               val array = sha1(ByteString("req2") ++ infoHash).toArray
@@ -158,7 +176,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
               buffer.putShort(handshake.length.toShort)
               buffer.put(handshake.toByteBuffer)
               buffer.flip()
-              rc4(ByteString(buffer))
+              rc4Encrypt(ByteString(buffer))
             }
             emit(tcpOutput, hash1 ++ hash2 ++ encrypted)
             stage = Stage.CLIENT_AWAIT_CONFIRMATION
@@ -176,22 +194,21 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
           false
         } else {
           val (take, keep) = tcpInputBuffer.splitAt(vc.length)
-          if (deRc4(take) == vc) {
+          if (rc4Decrypt(take) == vc) {
             tcpInputBuffer = keep
             true
           } else {
             tcpInputBuffer = tcpInputBuffer.tail
-            serverRc4.reset()
-            (1 to 1024).foreach(_ ⇒ serverRc4.returnByte(0))
+            resetRc4(peerRc4Engine)
             syncVcPos()
           }
         }
       }
 
       if (syncVcPos()) {
-        val cryptoSelect = BigInt(deRc4(tcpInputBuffer.take(4)).toArray).intValue()
-        val padLength = BigInt((ByteString(0, 0) ++ deRc4(tcpInputBuffer.drop(4).take(2))).toArray).intValue()
-        deRc4(tcpInputBuffer.drop(4 + 2).take(padLength))
+        val cryptoSelect = BigInt(rc4Decrypt(tcpInputBuffer.take(4)).toArray).intValue()
+        val padLength = BigInt((ByteString(0, 0) ++ rc4Decrypt(tcpInputBuffer.drop(4).take(2))).toArray).intValue()
+        rc4Decrypt(tcpInputBuffer.drop(4 + 2).take(padLength))
         tcpInputBuffer = tcpInputBuffer.drop(4 + 2 + padLength)
         if ((cryptoSelect & 2) != 0) {
           rc4Enabled = true
@@ -202,7 +219,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
         }
         log.debug("Peer message stream encryption mode set to {}", if (rc4Enabled) "RC4" else "plaintext")
         stage = Stage.READY
-        emit(messageOutput, if (rc4Enabled) deRc4(tcpInputBuffer) else tcpInputBuffer)
+        emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer)
         tcpInputBuffer = ByteString.empty
       }
     }
@@ -227,7 +244,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
             pull(tcpInput)
 
           case Stage.READY ⇒
-            emit(messageOutput, if (rc4Enabled) deRc4(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) pull(tcpInput))
+            emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) pull(tcpInput))
             tcpInputBuffer = ByteString.empty
         }
       }
@@ -249,7 +266,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
         if (stage != Stage.READY || !isAvailable(tcpOutput)) {
           messageInputBuffer :+= grab(messageInput)
         } else {
-          emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput)).map(msg ⇒ if (rc4Enabled) rc4(msg) else msg), () ⇒ if (!hasBeenPulled(messageInput)) pull(messageInput))
+          emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput)).map(msg ⇒ if (rc4Enabled) rc4Encrypt(msg) else msg), () ⇒ if (!hasBeenPulled(messageInput)) pull(messageInput))
           messageInputBuffer = Vector.empty
         }
       }
