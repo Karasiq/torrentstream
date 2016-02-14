@@ -34,8 +34,6 @@ object PeerDispatcher {
 class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.{dispatcher, system}
   private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
-  private val updateBitField = config.getBoolean("update-bitfield")
-
   private val peers = mutable.Map.empty[ActorRef, PeerData]
   private val demand = mutable.Map.empty[ActorRef, Int].withDefaultValue(0)
 
@@ -92,10 +90,11 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       }
 
     case request @ RequestPeers(index, count) if (0 until torrent.pieces).contains(index) ⇒
-      val result = peers.collect {
-        case (peer, data) if data.completed(index) && !data.chokedBy ⇒
-          peer
-      }.toSeq.sortBy(demand).take(count)
+      val (result, _) = peers
+        .toSeq
+        .filter(pd ⇒ pd._2.completed(index) && !pd._2.chokedBy)
+        .sortBy(pd ⇒ pd._2.latency → demand(pd._1))
+        .unzip
 
       if (result.nonEmpty) {
         idleSchedule.cancel()
@@ -122,9 +121,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       }
       this.ownData = ownData.copy(completed = completed)
       log.debug("Piece buffered: #{}", index)
-      if (updateBitField) {
-        peers.keys.foreach(_ ! UpdateBitField(completed))
-      }
+      peers.keys.foreach(_ ! UpdateBitField(completed))
 
     case PieceBlockRequest(index, offset, length) ⇒
       pieces.find(p ⇒ p.pieceIndex == index && p.data.length >= (offset + length)) match {
