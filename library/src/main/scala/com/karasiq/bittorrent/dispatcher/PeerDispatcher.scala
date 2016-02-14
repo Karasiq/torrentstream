@@ -15,7 +15,7 @@ import com.karasiq.bittorrent.protocol.{PeerMessages, PeerStreamEncryption}
 import scala.collection.{BitSet, mutable}
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.{Random, Success}
+import scala.util.{Failure, Random, Success}
 
 case class ConnectPeer(address: InetSocketAddress)
 case object RequestData
@@ -141,21 +141,16 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
 
     case connect @ ConnectPeer(address) if !peers.exists(_._2.address == address) ⇒
       log.info("Connecting to: {}", address)
-      val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
-      val flow = Flow.fromGraph(GraphDSL.create() { implicit b ⇒
-        import GraphDSL.Implicits._
-        val messages = b.add(Flow[ByteString].via(PeerConnection.framing).to(Sink.foreach(messageProcessor ! _)))
-        val output = b.add(
-          Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
-            .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
-            .keepAlive[ByteString](30 seconds, () ⇒ PeerMessages.KeepAlive)
-        )
-        val encryption = b.add(new PeerStreamEncryption(ownData.infoHash)(log))
-        encryption.out1 ~> messages.in
-        output.out ~> encryption.in2
-        FlowShape(encryption.in1, encryption.out2)
-      })
-      Tcp().outgoingConnection(address).join(flow).run()
+      Tcp().outgoingConnection(address)
+        .alsoTo(Sink.onComplete {
+          case Success(_) ⇒
+            // Pass
+
+          case Failure(_) ⇒
+            // Retry without encryption
+            Tcp().outgoingConnection(address).join(plainConnection(address)).run()
+        })
+        .join(encryptedConnection(address)).run()
 
     case PeerConnected(peerData) ⇒
       peers += sender() → peerData
@@ -174,5 +169,43 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       val peer = sender()
       demand -= peer
       peers -= peer
+  }
+
+  private def encryptedConnection(address: InetSocketAddress): Flow[ByteString, ByteString, Unit] = {
+    val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
+    Flow.fromGraph(GraphDSL.create() { implicit b ⇒
+      import GraphDSL.Implicits._
+      val messages = b.add(
+        Flow[ByteString]
+          .via(PeerConnection.framing)
+          .to(Sink.foreach(messageProcessor ! _))
+      )
+      val output = b.add(
+        Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
+          .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
+          .keepAlive[ByteString](30 seconds, () ⇒ PeerMessages.KeepAlive)
+      )
+      val encryption = b.add(new PeerStreamEncryption(ownData.infoHash)(log))
+      encryption.out1 ~> messages.in
+      output.out ~> encryption.in2
+      FlowShape(encryption.in1, encryption.out2)
+    })
+  }
+
+  private def plainConnection(address: InetSocketAddress): Flow[ByteString, ByteString, Unit] = {
+    val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
+    Flow.fromGraph(GraphDSL.create() { implicit b ⇒
+      val messages = b.add(
+        Flow[ByteString]
+          .via(PeerConnection.framing)
+          .to(Sink.foreach(messageProcessor ! _))
+      )
+      val output = b.add(
+        Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
+          .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
+          .keepAlive[ByteString](30 seconds, () ⇒ PeerMessages.KeepAlive)
+      )
+      FlowShape(messages.in, output.out)
+    })
   }
 }
