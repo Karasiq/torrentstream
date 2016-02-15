@@ -38,7 +38,7 @@ class TorrentManager extends Actor with ActorLogging {
           dispatchers :+= torrent → dispatcher
           dispatcher
       }
-      (dispatcher ? RequestData).collect {
+      (dispatcher ? RequestDispatcherData).collect {
         case DispatcherData(data) ⇒
           PeerDispatcherData(torrent, dispatcher, data)
       }.pipeTo(sender)
@@ -46,7 +46,7 @@ class TorrentManager extends Actor with ActorLogging {
     case RequestDispatcher(infoHash) ⇒
       dispatchers.find(_._1.infoHash == infoHash).foreach {
         case (torrent, dispatcher) ⇒
-          (dispatcher ? RequestData).collect {
+          (dispatcher ? RequestDispatcherData).collect {
             case DispatcherData(data) ⇒
               PeerDispatcherData(torrent, dispatcher, data)
           }.pipeTo(sender)

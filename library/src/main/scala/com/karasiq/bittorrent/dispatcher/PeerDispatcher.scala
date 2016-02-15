@@ -17,13 +17,15 @@ import scala.concurrent.duration._
 import scala.language.postfixOps
 import scala.util.{Failure, Random, Success}
 
-case class ConnectPeer(address: InetSocketAddress)
-case object RequestData
+sealed trait PeerDispatcherCommand
+case class ConnectPeer(address: InetSocketAddress) extends PeerDispatcherCommand
+case object RequestDispatcherData extends PeerDispatcherCommand
 case class DispatcherData(data: SeedData)
+case class UpdateBitField(completed: BitSet) extends PeerDispatcherCommand
 
-case class RequestPeers(piece: Int, count: Int)
-case class PeerList(peers: Seq[ActorRef])
-case class UpdateBitField(completed: BitSet)
+private[dispatcher] final class PeerDispatcherContext(val peers: Map[ActorRef, PeerData]) extends AnyVal
+
+
 
 object PeerDispatcher {
   def props(torrent: Torrent): Props = {
@@ -34,6 +36,7 @@ object PeerDispatcher {
 class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.{dispatcher, system}
   private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
+  private val queueSize = config.getInt("download-queue-size")
   private val maxPeers = config.getInt("max-peers")
   private val bufferSize = config.getInt("buffer-size")
   private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
@@ -45,11 +48,15 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   }
 
   private val connectionRequests = mutable.Set.empty[InetSocketAddress]
-  private val peers = mutable.Map.empty[ActorRef, PeerData]
-  private val demand = mutable.Map.empty[ActorRef, Int].withDefaultValue(0)
   private val announcer = context.actorOf(Props[HttpTracker])
   private var ownData = SeedData(peerId, torrent.infoHash)
   private var pieces = Vector.empty[DownloadedPiece]
+  private var peers = Map.empty[ActorRef, PeerData]
+
+  private val queue = new PeerDownloadQueue(queueSize)
+  private implicit def dispatcherCtx: PeerDispatcherContext = {
+    new PeerDispatcherContext(peers)
+  }
 
   def scheduleIdleStop(): Cancellable = {
     context.system.scheduler.scheduleOnce(5 minutes, self, PoisonPill)
@@ -77,33 +84,13 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
           system.scheduler.scheduleOnce(1 minute, self, request)
 
         case Success(TrackerResponse(_, interval, minInterval, trackerId, _, _, peerList)) ⇒
-          val next = 5.minutes // minInterval.getOrElse(interval).seconds
+          val next = minInterval.getOrElse(interval).seconds
           log.info("{} peers received from tracker: {}, next request in {}", peerList.length, request.announce, next)
           system.scheduler.scheduleOnce(next, self, request.copy(trackerId = trackerId))
           peerList.foreach(peer ⇒ self ! ConnectPeer(peer.address))
 
         case _ ⇒
           system.scheduler.scheduleOnce(5 minutes, self, request)
-      }
-
-    case request @ RequestPeers(index, count) if (0 until torrent.pieces).contains(index) ⇒
-      val result = peers.toSeq
-        .filter(pd ⇒ pd._2.completed(index) && !pd._2.chokedBy)
-        .sortBy(pd ⇒ (pd._2.latency / 30) + (demand(pd._1) % 4))
-        .map(_._1)
-        .take(count)
-
-      if (result.nonEmpty) {
-        idleSchedule.cancel()
-        idleSchedule = scheduleIdleStop()
-        result.foreach(peer ⇒ demand += peer → (demand(peer) + 1))
-        sender() ! PeerList(result)
-      } else {
-        val sender = context.sender()
-        context.system.scheduler.scheduleOnce(3 seconds) {
-          // Retry
-          self.tell(request, sender)
-        }
       }
 
     case piece @ DownloadedPiece(index, data) ⇒
@@ -120,20 +107,30 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       log.debug("Piece buffered: #{}", index)
       peers.keys.foreach(_ ! UpdateBitField(completed))
 
-    case PieceBlockRequest(index, offset, length) ⇒
+    case request @ PieceBlockRequest(index, offset, length) ⇒
+      idleSchedule.cancel()
+      idleSchedule = scheduleIdleStop()
       pieces.find(p ⇒ p.pieceIndex == index && p.data.length >= (offset + length)) match {
         case Some(DownloadedPiece(`index`, data)) ⇒
-          log.debug("Block uploaded: {}/{}/{}", index, offset, length)
           val block = DownloadedBlock(index, offset, data.slice(offset, offset + length))
           require(block.data.length == length)
           sender() ! block
 
         case _ ⇒
-          log.warning("Missing block request: {}/{}/{}", index, offset, length)
-          sender() ! BlockDownloadFailed(index, offset, length)
+          log.debug("Downloading block: {}/{}/{}", index, offset, length)
+          queue.download(request)
       }
 
-    case RequestData ⇒
+    case c: CancelBlockDownload ⇒
+      queue.cancel(c)
+
+    case block: DownloadedBlock ⇒
+      queue.success(block)
+
+    case fd: BlockDownloadFailed ⇒
+      queue.failure(fd)
+
+    case RequestDispatcherData ⇒
       sender() ! DispatcherData(ownData)
 
     case connect @ ConnectPeer(address) if !connectionRequests.contains(address) && peers.size < maxPeers ⇒
@@ -156,21 +153,22 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
 
     case PeerConnected(peerData) ⇒
       peers += sender() → peerData
+      queue.retryQueued()
 
     case PeerStateChanged(peerData) ⇒
       peers += sender() → peerData
+      queue.retryQueued()
 
     case PeerDisconnected(peerData) ⇒
       // context.system.scheduler.scheduleOnce(5 seconds, self, ConnectPeer(peerData.address, ownData))
       val peer = sender()
-      demand -= peer
       peers -= peer
       context.unwatch(peer)
+      queue.removePeer(peer)
 
     case Terminated(peer) ⇒
-      val peer = sender()
-      demand -= peer
       peers -= peer
+      queue.removePeer(peer)
   }
 
   private def encryptedConnection(address: InetSocketAddress): Flow[ByteString, ByteString, Unit] = {

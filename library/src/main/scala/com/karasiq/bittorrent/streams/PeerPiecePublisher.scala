@@ -20,7 +20,7 @@ object PeerPiecePublisher {
 }
 
 class PeerPiecePublisher(peerDispatcher: ActorRef, request: PieceDownloadRequest) extends Actor with ActorLogging with ActorPublisher[DownloadedPiece] with ImplicitMaterializer {
-  private val blockSize = context.system.settings.config.getInt("karasiq.torrentstream.peer-load-balancer.block-size")
+  private val blockSize = context.system.settings.config.getInt("karasiq.torrentstream.peer-dispatcher.block-size")
   private var piece: Option[DownloadedPiece] = None
 
   private def checkHash(data: ByteString, hash: ByteString): Boolean = {
