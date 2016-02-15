@@ -69,8 +69,8 @@ class PeerBlockPublisher(peerDispatcher: ActorRef, pieceSize: Int) extends Actor
 
   override def receive: Receive = {
     case request @ PieceBlockRequest(index, offset, length) ⇒
-      if (peerSet.size < peersPerPiece && !awaitingPeer) {
-        peerDispatcher ! RequestPeers(index, peersPerPiece)
+      if (!awaitingPeer && peerSet.size < peersPerPiece) {
+        peerDispatcher ! RequestPeers(index, peersPerPiece - peerSet.size)
         awaitingPeer = true
       }
 
@@ -87,7 +87,7 @@ class PeerBlockPublisher(peerDispatcher: ActorRef, pieceSize: Int) extends Actor
       }
 
     case PeerList(peers) ⇒
-      val newPeers = peers.filterNot(peerSet).take(peersPerPiece - peerSet.size)
+      val newPeers = peers.filterNot(peerSet)
       peerSet ++= newPeers
       newPeers.foreach(context.watch)
       awaitingPeer = false

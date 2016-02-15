@@ -266,7 +266,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
         if (stage != Stage.READY || !isAvailable(tcpOutput)) {
           messageInputBuffer :+= grab(messageInput)
         } else {
-          emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput)).map(msg ⇒ if (rc4Enabled) rc4Encrypt(msg) else msg), () ⇒ if (!hasBeenPulled(messageInput)) pull(messageInput))
+          emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput)).map(msg ⇒ if (rc4Enabled) rc4Encrypt(msg) else msg), () ⇒ if (!hasBeenPulled(messageInput)) tryPull(messageInput))
           messageInputBuffer = Vector.empty
         }
       }

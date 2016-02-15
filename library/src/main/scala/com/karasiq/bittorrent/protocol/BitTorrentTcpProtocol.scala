@@ -8,7 +8,7 @@ import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
 import scala.collection.BitSet
 import scala.util.Try
 
-object BitTorrentTcpProtocol {
+private[protocol] object BitTorrentTcpProtocol {
   implicit class ByteBufferOps(val bb: ByteBuffer) extends AnyVal {
     def getByteString(size: Int): ByteString = {
       val array = new Array[Byte](Seq(size, bb.remaining()).min)

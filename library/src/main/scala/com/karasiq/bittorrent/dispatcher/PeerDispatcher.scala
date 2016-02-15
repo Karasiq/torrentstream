@@ -34,9 +34,9 @@ object PeerDispatcher {
 class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.{dispatcher, system}
   private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
-  private val peers = mutable.Map.empty[ActorRef, PeerData]
-  private val demand = mutable.Map.empty[ActorRef, Int].withDefaultValue(0)
-
+  private val maxPeers = config.getInt("max-peers")
+  private val bufferSize = config.getInt("buffer-size")
+  private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
   private val peerId: ByteString = {
     val prefix = ByteString(config.getString("peer-id-prefix"))
     require(prefix.length < 20, "Invalid peer id prefix")
@@ -44,14 +44,11 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     prefix ++ Array.fill(20 - prefix.length)(charset(Random.nextInt(charset.length)).toByte)
   }
 
-  private val bufferSize = config.getInt("buffer-size")
-
+  private val connectionRequests = mutable.Set.empty[InetSocketAddress]
+  private val peers = mutable.Map.empty[ActorRef, PeerData]
+  private val demand = mutable.Map.empty[ActorRef, Int].withDefaultValue(0)
   private val announcer = context.actorOf(Props[HttpTracker])
-
-  private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
-
   private var ownData = SeedData(peerId, torrent.infoHash)
-
   private var pieces = Vector.empty[DownloadedPiece]
 
   def scheduleIdleStop(): Cancellable = {
@@ -90,11 +87,11 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       }
 
     case request @ RequestPeers(index, count) if (0 until torrent.pieces).contains(index) ⇒
-      val (result, _) = peers
-        .toSeq
+      val result = peers.toSeq
         .filter(pd ⇒ pd._2.completed(index) && !pd._2.chokedBy)
-        .sortBy(pd ⇒ pd._2.latency → demand(pd._1))
-        .unzip
+        .sortBy(pd ⇒ (pd._2.latency / 30) + (demand(pd._1) % 4))
+        .map(_._1)
+        .take(count)
 
       if (result.nonEmpty) {
         idleSchedule.cancel()
@@ -139,7 +136,8 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     case RequestData ⇒
       sender() ! DispatcherData(ownData)
 
-    case connect @ ConnectPeer(address) if !peers.exists(_._2.address == address) ⇒
+    case connect @ ConnectPeer(address) if !connectionRequests.contains(address) && peers.size < maxPeers ⇒
+      connectionRequests += address
       log.info("Connecting to: {}", address)
       Tcp().outgoingConnection(address)
         .alsoTo(Sink.onComplete {
@@ -148,8 +146,12 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
 
           case Failure(_) ⇒
             // Retry without encryption
-            Tcp().outgoingConnection(address).join(plainConnection(address)).run()
+            Tcp().outgoingConnection(address)
+              .initialTimeout(10 seconds)
+              .join(plainConnection(address))
+              .run()
         })
+        .initialTimeout(10 seconds)
         .join(encryptedConnection(address)).run()
 
     case PeerConnected(peerData) ⇒

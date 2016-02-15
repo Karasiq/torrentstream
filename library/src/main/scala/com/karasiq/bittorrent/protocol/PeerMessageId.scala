@@ -1,6 +1,6 @@
 package com.karasiq.bittorrent.protocol
 
-import com.karasiq.bittorrent.protocol.extensions.BitTorrentFastMessageIds
+import com.karasiq.bittorrent.protocol.extensions.{BitTorrentFastMessageIds, ExtensionProtocolMessageIds}
 
 sealed trait BitTorrentMessageIds {
   final val CHOKE = 0
@@ -15,4 +15,4 @@ sealed trait BitTorrentMessageIds {
   final val PORT = 9
 }
 
-object PeerMessageId extends BitTorrentMessageIds with BitTorrentFastMessageIds
+object PeerMessageId extends BitTorrentMessageIds with BitTorrentFastMessageIds with ExtensionProtocolMessageIds
