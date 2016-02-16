@@ -29,7 +29,7 @@ object TorrentSource {
 
   def pieces(dispatcher: ActorRef, pcs: Vector[TorrentPiece]): Source[DownloadedPiece, Unit] = {
     Source(pcs)
-      .flatMapMerge(3, { piece ⇒ pieceSource(dispatcher, piece) })
+      .flatMapMerge(2, { piece ⇒ pieceSource(dispatcher, piece) })
   }
 
   def torrent(dispatcher: ActorRef, torrent: Torrent): Source[DownloadedPiece, Unit] = {

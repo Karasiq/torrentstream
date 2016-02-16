@@ -8,6 +8,7 @@ import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl._
 import akka.util.ByteString
+import com.karasiq.bittorrent.dispatcher.MessageConversions._
 import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
 import com.karasiq.bittorrent.dispatcher.PeerConnectionState._
 import com.karasiq.bittorrent.format.Torrent
@@ -37,8 +38,8 @@ sealed trait PeerConnectionContext
 object PeerConnectionContext {
   case class HandshakeContext(address: InetSocketAddress, ownData: SeedData) extends PeerConnectionContext
 
-  case class QueuedDownload(pipelined: Boolean, index: Int, offset: Int, length: Int, handler: ActorRef)
-  case class QueuedUpload(index: Int, offset: Int, length: Int, data: ByteString = ByteString.empty)
+  case class QueuedDownload(pipelined: Boolean, index: Int, offset: Int, length: Int, handler: ActorRef) extends PieceBlockInfo
+  case class QueuedUpload(index: Int, offset: Int, override val length: Int, data: ByteString = ByteString.empty) extends PieceBlockData
   case class PeerContext(downloadQueue: List[QueuedDownload], uploadQueue: List[QueuedUpload], ownData: SeedData, peerData: PeerData, epHandshake: Option[EpHandshake] = None) extends PeerConnectionContext
 }
 
@@ -254,30 +255,32 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
           pushMessage(PeerMessage(PeerMessageId.REQUEST, request))
           stay() using ctx.copy(queue :+ QueuedDownload(pipelined = true, index, offset, length, sender()))
         } else {
+//          sender() ! BlockDownloadFailed(index, offset, length)
+//          stay()
           stay() using ctx.copy(queue :+ QueuedDownload(pipelined = false, index, offset, length, sender()))
         }
 
-      case Event(PieceMsg(block @ PieceBlock(index, offset, data)), ctx @ PeerContext(queue, _, _, peerData, _)) if block.index == index && block.offset == offset ⇒
-        val (drop, keep) = queue.partition(q ⇒ q.index == index && q.offset == offset && q.length == data.length)
+      case Event(PieceMsg(block @ PieceBlock(index, offset, data)), ctx @ PeerContext(queue, _, _, peerData, _)) ⇒
+        val (drop, keep) = queue.partition(_.relatedTo(block))
         if (drop.nonEmpty) {
           log.debug("Block received: {}/{}/{}", index, offset, data.length)
           drop.foreach {
             case QueuedDownload(_, _, _, _, handler) ⇒
-              handler ! DownloadedBlock(index, offset, data)
+              handler ! block.downloaded
           }
         }
         download(ctx, keep)
 
-      case Event(RejectMsg(PieceBlockRequest(index, offset, length)), ctx @ PeerContext(queue, _, _, peerData, _)) if peerData.extensions.fast ⇒
-        val (drop, keep) = queue.partition(q ⇒ q.index == index && q.offset == offset && q.length == length)
+      case Event(RejectMsg(request @ PieceBlockRequest(index, offset, length)), ctx @ PeerContext(queue, _, _, peerData, _)) if peerData.extensions.fast ⇒
+        val (drop, keep) = queue.partition(_.relatedTo(request))
         if (drop.nonEmpty) {
           log.debug("Rejected: {}/{}/{}", index, offset, length)
           drop.foreach(_.handler ! BlockDownloadFailed(index, offset, length))
         }
         download(ctx, keep)
 
-      case Event(CancelBlockDownload(index, offset, length), ctx @ PeerContext(queue, _, _, _, _)) ⇒
-        val (drop, keep) = queue.partition(q ⇒ q.index == index && q.offset == offset && q.length == length)
+      case Event(c @ CancelBlockDownload(index, offset, length), ctx @ PeerContext(queue, _, _, _, _)) ⇒
+        val (drop, keep) = queue.partition(_.relatedTo(c))
         // drop.foreach(_.handler ! BlockDownloadFailed(index, offset, length))
         if (drop.exists(_.pipelined)) {
           cancelDownload(ctx, drop.head)
@@ -317,8 +320,8 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
 
       case Event(Cancel, PeerContext(queue, _, _, peerData, _)) ⇒
         queue.foreach {
-          case QueuedDownload(pipelined, index, offset, length, handler) ⇒
-            handler ! BlockDownloadFailed(index, offset, length)
+          case dl @ QueuedDownload(_, index, offset, length, handler) ⇒
+            handler ! dl.failed
             log.debug("Block download failed: peer connection closed ({}/{}/{})", index, offset, length)
         }
         log.warning(s"Peer disconnected: ${peerData.address}")
@@ -359,7 +362,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
 
   private def cancelDownload(ctx: PeerContext, download: QueuedDownload): Unit = {
     val (drop, keep) = messageBuffer.partition {
-      case Msg(RequestMsg(PieceBlockRequest(index, offset, length))) if index == download.index && offset == download.offset && length == download.length ⇒
+      case Msg(RequestMsg(request @ PieceBlockRequest(index, offset, length))) if download.relatedTo(request) ⇒
         true
 
       case _ ⇒
@@ -368,16 +371,15 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
     if (drop.nonEmpty) {
       messageBuffer = keep
     } else {
-      pushMessage(PeerMessage(PeerMessageId.CANCEL, PieceBlockRequest(download.index, download.offset, download.length)))
+      pushMessage(PeerMessage(PeerMessageId.CANCEL, download.request))
     }
   }
 
   private def download(ctx: PeerContext, queue: List[QueuedDownload]): State = {
     val newQueue: List[QueuedDownload] = {
       val (pipeline, rest) = queue.splitAt(downloadQueueLimit)
-      pipeline.filterNot(_.pipelined).foreach {
-        case QueuedDownload(_, index, offset, length, _) ⇒
-          pushMessage(PeerMessage(PeerMessageId.REQUEST, PieceBlockRequest(index, offset, length)))
+      pipeline.filterNot(_.pipelined).foreach { dl ⇒
+        pushMessage(PeerMessage(PeerMessageId.REQUEST, dl.request))
       }
       pipeline.map(_.copy(pipelined = true)) ++ rest
     }
@@ -390,8 +392,8 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
 
   @tailrec
   private def upload(ctx: PeerContext, queue: List[QueuedUpload]): State = queue match {
-    case QueuedUpload(index, offset, length, data) :: rest if data.nonEmpty ⇒
-      pushMessage(PeerMessage(PeerMessageId.PIECE, PieceBlock(index, offset, data)))
+    case (qu: QueuedUpload) :: rest if qu.data.nonEmpty ⇒
+      pushMessage(PeerMessage(PeerMessageId.PIECE, qu.message))
       upload(ctx, rest)
 
     case _ ⇒

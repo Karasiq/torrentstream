@@ -244,7 +244,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
             pull(tcpInput)
 
           case Stage.READY ⇒
-            emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) pull(tcpInput))
+            emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
             tcpInputBuffer = ByteString.empty
         }
       }

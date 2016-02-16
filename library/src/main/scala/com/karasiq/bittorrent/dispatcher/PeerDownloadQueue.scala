@@ -1,48 +1,65 @@
 package com.karasiq.bittorrent.dispatcher
 
 import akka.actor.{ActorContext, ActorRef}
+import com.karasiq.bittorrent.dispatcher.MessageConversions._
 import com.karasiq.bittorrent.protocol.PeerMessages._
 
-private[dispatcher] class PeerDownloadQueue(queueSize: Int)(implicit self: ActorRef) {
-  assert(queueSize > 0, "Invalid download queue size")
+private[dispatcher] final class PeerDownloadQueue(blockSize: Int, minQueueLength: Int, maxQueueSize: Int)(implicit self: ActorRef) {
+  require(blockSize > 0, "Invalid block size")
+  assert(minQueueLength > 0 && maxQueueSize > 0, "Invalid download queue size")
 
-  case class QueuedRequest(handler: Option[ActorRef], request: PieceBlockRequest, time: Long = 0)
+  case class QueuedRequest(handler: Option[ActorRef], request: PieceBlockRequest, time: Long = 0, retry: Boolean = false)
 
   case class PeerDownloadRate(time: Long, downloaded: Long) {
+    val rate: Long = downloaded * 1000 / (time + 1)
+
     private val last = if (downloaded == 0) 0 else System.currentTimeMillis()
 
     def updatedAgo: Long = System.currentTimeMillis() - last
 
     def update(startTime: Long, bytes: Long): PeerDownloadRate = {
-      val currentTime = System.currentTimeMillis()
-      PeerDownloadRate(1000 + (currentTime - startTime), (downloaded * 1000 / (time + 1)) + bytes)
-    }
-
-    def rate: Long = {
-      downloaded * 1000L / (time + 1)
+      PeerDownloadRate(1000 + (System.currentTimeMillis() - startTime), rate + bytes)
     }
   }
 
-  private var demand: Map[ActorRef, Seq[QueuedRequest]] = Map.empty.withDefaultValue(Vector.empty)
+  object PeerDownloadRate {
+    val empty = PeerDownloadRate(0, 0)
+  }
+
+  case class PeerDemand(queue: Seq[QueuedRequest], rate: PeerDownloadRate)
+
+  object PeerDemand {
+    val empty = PeerDemand(Vector.empty, PeerDownloadRate.empty)
+  }
+
+  private var demand: Map[ActorRef, PeerDemand] = Map.empty.withDefaultValue(PeerDemand.empty)
 
   private var queue: Seq[QueuedRequest] = Vector.empty
 
-  private var downloadRate: Map[ActorRef, PeerDownloadRate] = Map.empty.withDefaultValue(PeerDownloadRate(0, 0))
-
   private def download(qr: QueuedRequest)(implicit ctx: ActorContext, dsp: PeerDispatcherContext): Unit = {
     val available = dsp.peers.filter(pd ⇒ pd._2.completed(qr.request.index) && !pd._2.chokedBy).toSeq
-    val fastest = available.sortBy(pd ⇒ downloadRate(pd._1).rate)(Ordering[Long].reverse)
+    val fastest = available.sortBy(pd ⇒ demand(pd._1).rate.rate)(Ordering[Long].reverse)
 
-    val currentPeer = fastest.find(pd ⇒ downloadRate(pd._1).downloaded > 0 && demand(pd._1).length < queueSize)
-    /* currentPeer.foreach {
-      case (p, _) ⇒
-        println(s"Peer: $p (demand: ${demand(p).length}, rate: ${downloadRate(p).rate})")
-    } */
-    val peers = currentPeer.toVector ++ available.filter(pd ⇒ !currentPeer.contains(pd) && downloadRate(pd._1).updatedAgo > 60000 && demand(pd._1).length < 5)
+    val currentPeer = fastest.find {
+      case (peer, _) ⇒
+        val PeerDemand(requests, rate) = demand(peer)
+        val queueSize = Seq((rate.rate / blockSize + 1).toInt * minQueueLength, maxQueueSize).min
+        // println(s"Peer: $peer (demand: ${requests.length}/$queueSize, rate: ${rate.rate})")
+        rate.downloaded > 0 && requests.length < queueSize
+    }
+
+    val slowest = available.filter {
+      case (peer, _) ⇒
+        val PeerDemand(requests, rate) = demand(peer)
+        !currentPeer.exists(_._1 == peer) && (rate.updatedAgo > 15000 || rate.rate < blockSize) && requests.length < 3
+    }
+
+    val peers = currentPeer ++ slowest
     if (peers.nonEmpty) {
       peers.foreach {
         case (peer, data) ⇒
-          demand += peer → (demand(peer) :+ qr.copy(time = System.currentTimeMillis()))
+          val pd = demand(peer)
+          demand += peer → pd.copy(pd.queue :+ qr.copy(time = System.currentTimeMillis(), retry = peers.head._1 == peer))
           peer ! qr.request
       }
     } else {
@@ -57,51 +74,49 @@ private[dispatcher] class PeerDownloadQueue(queueSize: Int)(implicit self: Actor
   def success(block: DownloadedBlock)(implicit ctx: ActorContext, dsp: PeerDispatcherContext): Unit = {
     val successPeer = ctx.sender()
     demand = demand.map {
-      case (peer, requests) ⇒
-        val (drop, keep) = requests.partition(qr ⇒ qr.request.index == block.index && qr.request.offset == block.offset && qr.request.length == block.data.length)
-        drop.headOption.foreach { qr ⇒
-          val rate = downloadRate(peer).update(qr.time, block.data.length)
-          // println("Rate: " + rate + " " + rate.rate)
-          downloadRate += peer → rate
-        }
-        drop.flatMap(_.handler).foreach(_ ! block)
+      case (peer, PeerDemand(requests, rate)) ⇒
+        val (drop, keep) = requests.partition(_.request.relatedTo(block))
+        val newRate = drop.headOption.fold(rate)(qr ⇒ rate.update(qr.time, block.data.length))
         if (peer == successPeer) {
-          peer → keep
+          drop.flatMap(_.handler).foreach(_ ! block)
+          peer → PeerDemand(keep, newRate)
         } else {
-          peer → (drop.map(_.copy(handler = None)) ++ keep)
+          peer → PeerDemand(drop.map(_.copy(handler = None)) ++ keep, newRate)
         }
-    }.filter(_._2.nonEmpty).withDefaultValue(Vector.empty)
+    }.filter(_._2.queue.nonEmpty).withDefaultValue(PeerDemand.empty)
+
+    val (drop, keep) = queue.partition(_.request.relatedTo(block))
+    drop.flatMap(_.handler).foreach(_ ! block)
+    queue = keep
     retryQueued()
   }
 
   def failure(fd: BlockDownloadFailed)(implicit ctx: ActorContext, dsp: PeerDispatcherContext): Unit = {
-    def predicate(qr: QueuedRequest): Boolean = {
-      qr.request.index == fd.index && qr.request.offset == fd.offset && qr.request.length == fd.length
-    }
     val peer = ctx.sender()
-    val (drop, keep) = demand(peer).partition(predicate)
+    val pd @ PeerDemand(requests, _) = demand(peer)
+    val (drop, keep) = requests.partition(_.request.relatedTo(fd))
     if (keep.isEmpty) {
       demand -= peer
     } else {
-      demand += peer → keep
+      demand += peer → pd.copy(keep)
     }
-    if (!demand.valuesIterator.flatten.exists(predicate)) {
+    if (drop.exists(_.retry)) {
       queue ++= drop
+      retryQueued()(ctx, new PeerDispatcherContext(dsp.peers - peer))
     }
-    retryQueued()(ctx, new PeerDispatcherContext(dsp.peers - peer))
   }
 
   def cancel(cancel: CancelBlockDownload)(implicit ctx: ActorContext, dsp: PeerDispatcherContext): Unit = {
-    def predicate(qr: QueuedRequest): Boolean = qr.handler.contains(ctx.sender()) && qr.request.index == cancel.index && qr.request.offset == cancel.offset && qr.request.length == cancel.length
+    def matches(qr: QueuedRequest): Boolean = qr.handler.contains(ctx.sender()) && qr.request.relatedTo(cancel)
     demand = demand.map {
-      case (peer, requests) ⇒
-        val (drop, keep) = requests.partition(predicate)
+      case (peer, pd @ PeerDemand(requests, _)) ⇒
+        val (drop, keep) = requests.partition(matches)
         if (drop.nonEmpty) {
           peer ! cancel
         }
-        peer → keep
-    }.withDefaultValue(Vector.empty)
-    queue = queue.filterNot(predicate)
+        peer → pd.copy(keep)
+    }.filter(_._2.queue.nonEmpty).withDefaultValue(PeerDemand.empty)
+    queue = queue.filterNot(matches)
     retryQueued()
   }
 
@@ -115,7 +130,7 @@ private[dispatcher] class PeerDownloadQueue(queueSize: Int)(implicit self: Actor
 
   def removePeer(peer: ActorRef)(implicit ctx: ActorContext, dsp: PeerDispatcherContext): Unit = {
     if (demand.contains(peer)) {
-      val requests = demand(peer)
+      val PeerDemand(requests, _) = demand(peer)
       demand -= peer
       queue ++= requests
       retryQueued()

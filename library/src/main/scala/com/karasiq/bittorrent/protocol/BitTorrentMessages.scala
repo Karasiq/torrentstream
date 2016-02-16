@@ -1,6 +1,7 @@
 package com.karasiq.bittorrent.protocol
 
 import akka.util.ByteString
+import com.karasiq.bittorrent.dispatcher.{PieceBlockData, PieceBlockInfo}
 import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
 
 import scala.collection.BitSet
@@ -23,9 +24,9 @@ trait BitTorrentMessages { self: TcpMessageSpecification ⇒
     }
   }
 
-  case class PieceBlockRequest(index: Int, offset: Int, length: Int)
+  case class PieceBlockRequest(index: Int, offset: Int, length: Int) extends PieceBlockInfo
 
-  case class PieceBlock(index: Int, offset: Int, data: ByteString)
+  case class PieceBlock(index: Int, offset: Int, data: ByteString) extends PieceBlockData
 
   case class PieceIndex(index: Int)
 

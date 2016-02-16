@@ -25,8 +25,6 @@ case class UpdateBitField(completed: BitSet) extends PeerDispatcherCommand
 
 private[dispatcher] final class PeerDispatcherContext(val peers: Map[ActorRef, PeerData]) extends AnyVal
 
-
-
 object PeerDispatcher {
   def props(torrent: Torrent): Props = {
     Props(classOf[PeerDispatcher], torrent)
@@ -36,7 +34,9 @@ object PeerDispatcher {
 class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.{dispatcher, system}
   private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
-  private val queueSize = config.getInt("download-queue-size")
+  private val blockSize = config.getInt("block-size")
+  private val minQueueSize = config.getInt("download-queue-min")
+  private val maxQueueSize = config.getInt("download-queue-max")
   private val maxPeers = config.getInt("max-peers")
   private val bufferSize = config.getInt("buffer-size")
   private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
@@ -53,7 +53,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   private var pieces = Vector.empty[DownloadedPiece]
   private var peers = Map.empty[ActorRef, PeerData]
 
-  private val queue = new PeerDownloadQueue(queueSize)
+  private val queue = new PeerDownloadQueue(blockSize, minQueueSize, maxQueueSize)
   private implicit def dispatcherCtx: PeerDispatcherContext = {
     new PeerDispatcherContext(peers)
   }
