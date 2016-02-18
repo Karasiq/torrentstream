@@ -35,8 +35,6 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   import context.{dispatcher, system}
   private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
   private val blockSize = config.getInt("block-size")
-  private val minQueueSize = config.getInt("download-queue-min")
-  private val maxQueueSize = config.getInt("download-queue-max")
   private val maxPeers = config.getInt("max-peers")
   private val bufferSize = config.getInt("buffer-size")
   private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
@@ -53,7 +51,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   private var pieces = Vector.empty[DownloadedPiece]
   private var peers = Map.empty[ActorRef, PeerData]
 
-  private val queue = new PeerDownloadQueue(blockSize, minQueueSize, maxQueueSize)
+  private val queue = new PeerDownloadQueue(blockSize)
   private implicit def dispatcherCtx: PeerDispatcherContext = {
     new PeerDispatcherContext(peers)
   }

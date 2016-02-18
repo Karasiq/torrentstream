@@ -3,6 +3,7 @@ package com.karasiq.bittorrent.streams
 import akka.actor._
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
+import com.karasiq.bittorrent.dispatcher.MessageConversions._
 import com.karasiq.bittorrent.dispatcher._
 import com.karasiq.bittorrent.protocol.PeerMessages.PieceBlockRequest
 
@@ -64,12 +65,12 @@ class PeerBlockPublisher(peerDispatcher: ActorRef, pieceSize: Int) extends Actor
     case Cancel ⇒
       context.stop(self)
 
-    case request @ PieceBlockRequest(index, offset, length) ⇒
+    case request: PieceBlockRequest ⇒
       requested += request
       peerDispatcher ! request
 
-    case block @ DownloadedBlock(index, offset, data) ⇒
-      val request = PieceBlockRequest(index, offset, data.length)
+    case block: DownloadedBlock ⇒
+      val request = block.request
       if (requested.contains(request)) {
         requested -= request
         deliver(block)

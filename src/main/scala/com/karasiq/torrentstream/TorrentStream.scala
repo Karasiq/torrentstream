@@ -12,7 +12,7 @@ case class TorrentStream(size: Long, source: Source[ByteString, Unit])
 object TorrentStream {
   def create(torrentManager: ActorRef, torrent: Torrent, fileName: String, ranges: Seq[(Long, Long)] = Nil)(implicit actorSystem: ActorSystem): TorrentStream = {
     val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
-    val bufferSize = config.getInt("buffer-size")
+    val bufferSize = config.getInt("buffer-size") / torrent.data.pieceLength
 
     val file = torrent.data.files.find(_.name == fileName).getOrElse(torrent.data.files.head)
     val pieces = if (ranges.nonEmpty) {

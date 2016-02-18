@@ -2,7 +2,7 @@ package com.karasiq.bittorrent.dispatcher
 
 import com.karasiq.bittorrent.protocol.PeerMessages._
 
-private[dispatcher] object MessageConversions {
+private[bittorrent] object MessageConversions {
   implicit class PieceBlockInfoOps(val pb: PieceBlockInfo) extends AnyVal {
     def request: PieceBlockRequest = {
       PieceBlockRequest(pb.index, pb.offset, pb.length)
