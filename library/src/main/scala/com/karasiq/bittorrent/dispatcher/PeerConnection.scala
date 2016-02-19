@@ -350,8 +350,11 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
   }
 
   private def pushMessage[T <: TopLevelMessage](message: T)(implicit ev: TcpMessageWriter[T]): Unit = {
-    require(messageBuffer.length < 200, "TCP buffer overflow")
-    messageBuffer :+= ev.toBytes(message)
+    if (messageBuffer.length >= 1000) {
+      messageBuffer = messageBuffer.drop(1) :+ ev.toBytes(message)
+    } else {
+      messageBuffer :+= ev.toBytes(message)
+    }
     pushBuffer()
   }
 

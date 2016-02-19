@@ -51,7 +51,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   private var pieces = Vector.empty[DownloadedPiece]
   private var peers = Map.empty[ActorRef, PeerData]
 
-  private val queue = new PeerDownloadQueue(blockSize)
+  private val queue = new PeerDownloadQueue(blockSize, context.system.settings.config.getInt("karasiq.torrentstream.peer-connection.download-queue-size"))
   private implicit def dispatcherCtx: PeerDispatcherContext = {
     new PeerDispatcherContext(peers)
   }
@@ -143,10 +143,12 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
             // Retry without encryption
             Tcp().outgoingConnection(address)
               .initialTimeout(10 seconds)
+              .idleTimeout(90 seconds)
               .join(plainConnection(address))
               .run()
         })
         .initialTimeout(10 seconds)
+        .idleTimeout(90 seconds)
         .join(encryptedConnection(address)).run()
 
     case PeerConnected(peerData) ⇒
