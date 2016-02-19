@@ -58,27 +58,3 @@ object PeerMessages extends TcpMessageSpecification with BitTorrentMessages with
     object ExtMsg extends PayloadMatcher[ExtendedMessage](PeerMessageId.EXTENDED_MESSAGE)
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

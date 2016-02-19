@@ -255,8 +255,6 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
           pushMessage(PeerMessage(PeerMessageId.REQUEST, request))
           stay() using ctx.copy(queue :+ QueuedDownload(pipelined = true, index, offset, length, sender()))
         } else {
-//          sender() ! BlockDownloadFailed(index, offset, length)
-//          stay()
           stay() using ctx.copy(queue :+ QueuedDownload(pipelined = false, index, offset, length, sender()))
         }
 

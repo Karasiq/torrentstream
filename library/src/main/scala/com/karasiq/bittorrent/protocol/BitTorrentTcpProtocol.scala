@@ -95,9 +95,9 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
   implicit object BitFieldMessageTcpProtocol extends TcpMessageProtocol[BitField] {
     private def readBitField(values: ByteString): (Int, BitSet) = {
       val buffer = values.toByteBuffer
-      val length = buffer.remaining()*8
+      val length = buffer.remaining() * 8
       val bitSet = new scala.collection.mutable.BitSet(length)
-      (0 until buffer.remaining()*8).foreach { i ⇒
+      (0 until length).foreach { i ⇒
         bitSet.update(i, (buffer.get(i/8) & (1 << (7 -(i % 8)))) > 0)
       }
       length → bitSet
