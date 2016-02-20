@@ -13,7 +13,7 @@ private[dispatcher] final class PeerDownloadQueue(blockSize: Int, maxQueueSize: 
     val rate: Long = downloaded * 1000 / (time + 1)
 
     val queueSize: Int = {
-      val qs: Int = (rate / blockSize * 2).toInt
+      val qs: Int = (rate / blockSize).toInt
       val minQueueSize: Int = 1
       if (qs < minQueueSize) {
         minQueueSize

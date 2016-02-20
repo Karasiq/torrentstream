@@ -33,7 +33,7 @@ object PeerDispatcher {
 
 class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
   import context.{dispatcher, system}
-  private val config = context.system.settings.config.getConfig("karasiq.torrentstream.peer-dispatcher")
+  private val config = context.system.settings.config.getConfig("karasiq.bittorrent.peer-dispatcher")
   private val blockSize = config.getInt("block-size")
   private val maxPeers = config.getInt("max-peers")
   private val bufferSize = config.getInt("buffer-size")
@@ -51,7 +51,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   private var pieces = Vector.empty[DownloadedPiece]
   private var peers = Map.empty[ActorRef, PeerData]
 
-  private val queue = new PeerDownloadQueue(blockSize, context.system.settings.config.getInt("karasiq.torrentstream.peer-connection.download-queue-size"))
+  private val queue = new PeerDownloadQueue(blockSize, context.system.settings.config.getInt("karasiq.bittorrent.peer-connection.download-queue-size"))
   private implicit def dispatcherCtx: PeerDispatcherContext = {
     new PeerDispatcherContext(peers)
   }
@@ -183,7 +183,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       val output = b.add(
         Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
           .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
-          .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
+          // .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
       )
       val encryption = b.add(new PeerStreamEncryption(ownData.infoHash)(log))
       encryption.out1 ~> messages.in
@@ -203,7 +203,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       val output = b.add(
         Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
           .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
-          .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
+          // .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
       )
       FlowShape(messages.in, output.out)
     })

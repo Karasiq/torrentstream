@@ -48,7 +48,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
   import context.system
 
   // Settings
-  private val config = system.settings.config.getConfig("karasiq.torrentstream.peer-connection")
+  private val config = system.settings.config.getConfig("karasiq.bittorrent.peer-connection")
   private val updateBitField = config.getBoolean("update-bitfield")
   private var downloadQueueLimit = config.getInt("download-queue-size")
   private val uploadQueueLimit = config.getInt("upload-queue-size")
