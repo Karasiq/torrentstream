@@ -17,8 +17,7 @@ lazy val librarySettings = Seq(
       "commons-codec" % "commons-codec" % "1.8",
       "commons-io" % "commons-io" % "2.4",
       "org.parboiled" %% "parboiled" % "2.1.1",
-      "org.bouncycastle" % "bcprov-jdk15on" % "1.52",
-      "org.bouncycastle" % "bcpkix-jdk15on" % "1.52"
+      "org.bouncycastle" % "bcprov-jdk15on" % "1.52"
     )
   },
   publishMavenStyle := true,
