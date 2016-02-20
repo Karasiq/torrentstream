@@ -183,7 +183,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       val output = b.add(
         Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
           .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
-          .keepAlive[ByteString](30 seconds, () ⇒ PeerMessages.KeepAlive)
+          .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
       )
       val encryption = b.add(new PeerStreamEncryption(ownData.infoHash)(log))
       encryption.out1 ~> messages.in
@@ -203,7 +203,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       val output = b.add(
         Source.single[ByteString](PeerHandshake("BitTorrent protocol", torrent.infoHash, peerId))
           .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
-          .keepAlive[ByteString](30 seconds, () ⇒ PeerMessages.KeepAlive)
+          .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
       )
       FlowShape(messages.in, output.out)
     })

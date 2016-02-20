@@ -180,12 +180,14 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
   }
 
   implicit object KeepAliveTcpProtocol extends TcpMessageProtocol[KeepAlive.type] {
+    private val keepAlive = ByteString(0, 0, 0, 0)
+  
     override def toBytes(value: KeepAlive.type): ByteString = {
-      ByteString(0, 0, 0, 0)
+      keepAlive
     }
 
     override def fromBytes(bs: ByteString): Option[KeepAlive.type] = {
-      if (bs.take(4) == ByteString(0, 0, 0, 0)) Some(KeepAlive) else None
+      if (bs.take(4) == keepAlive) Some(KeepAlive) else None
     }
   }
 }
