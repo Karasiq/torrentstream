@@ -7,7 +7,7 @@ private[app] case class TorrentInfo(announceList: Seq[Seq[String]], comment: Str
 private[app] object TorrentInfo {
   def fromTorrent(torrent: Torrent): TorrentInfo = {
     TorrentInfo(
-      if (torrent.announceList.nonEmpty) torrent.announceList else Seq(Seq(torrent.announce)),
+      if (torrent.announceList.nonEmpty) torrent.announceList else Vector(Vector(torrent.announce)),
       torrent.comment.getOrElse(""),
       torrent.createdBy.getOrElse(""),
       torrent.data.files.map(f ⇒ f.name → f.size),

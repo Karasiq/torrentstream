@@ -68,7 +68,7 @@ object Torrent {
           length <- data.long("length")
           pieceLength <- pieceLength
           pieces <- pieces
-        } yield TorrentFiles(name, pieceLength, pieces, Seq(TorrentFile(name, length)))
+        } yield TorrentFiles(name, pieceLength, pieces, Vector(TorrentFile(name, length)))
       }
 
     case _ ⇒

@@ -108,7 +108,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
     def rc4(engine: RC4Engine, data: ByteString): ByteString = {
       val input = data.toByteBuffer
       while (input.remaining() > 0) {
-        val length = Seq(input.remaining(), 1024).min
+        val length = Array(input.remaining(), 1024).min
         input.get(rc4InBuffer, 0, length)
         engine.processBytes(rc4InBuffer, 0, length, rc4OutBuffer, 0)
         input.position(input.position() - length)
@@ -206,8 +206,8 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
       }
 
       if (syncVcPos()) {
-        val cryptoSelect = BigInt(rc4Decrypt(tcpInputBuffer.take(4)).toArray).intValue()
-        val padLength = BigInt((ByteString(0, 0) ++ rc4Decrypt(tcpInputBuffer.drop(4).take(2))).toArray).intValue()
+        val cryptoSelect = BitTorrentTcpProtocol.int32FromBytes(rc4Decrypt(tcpInputBuffer.take(4)))
+        val padLength = BitTorrentTcpProtocol.int32FromBytes(rc4Decrypt(tcpInputBuffer.drop(4).take(2)))
         rc4Decrypt(tcpInputBuffer.drop(4 + 2).take(padLength))
         tcpInputBuffer = tcpInputBuffer.drop(4 + 2 + padLength)
         if ((cryptoSelect & 2) != 0) {

@@ -52,24 +52,18 @@ private[dispatcher] final class PeerDownloadQueue(blockSize: Int, maxQueueSize: 
   private var queue: Seq[QueuedRequest] = Vector.empty
 
   private def download(qr: QueuedRequest)(implicit ctx: ActorContext, dsp: PeerDispatcherContext): Unit = {
-    val available = dsp.peers.filter(pd ⇒ pd._2.completed(qr.request.index) && !pd._2.chokedBy).toStream.map {
-      case (peer, _) ⇒
-        peer → demand(peer)
-    }
+    val peers = for {
+      (peer, data) <- dsp.peers.iterator if data.completed(qr.request.index) && !data.chokedBy
+      pd @ PeerDemand(pq, rate) <- Some(demand(peer)) if pq.length < rate.queueSize
+    } yield peer → pd
 
-    val currentPeer = available
-      .filter(pd ⇒ pd._2.queue.length < pd._2.rate.queueSize)
-      .sortBy(_._2.rate.rate)(Ordering[Long].reverse)
-      .headOption
-
-    currentPeer match {
-      case Some((peer, pd)) ⇒
-        // println(s"Peer: $peer ${pd.queue.length}/${pd.rate.queueSize} (rate: ${pd.rate.rate})")
-        demand += peer → pd.copy(pd.queue :+ qr)
-        peer ! qr.request
-
-      case None ⇒
-        queue :+= qr
+    if (peers.nonEmpty) {
+      val (peer, pd) = peers.maxBy(_._2.rate.rate)
+      // println(s"Peer: $peer ${pd.queue.length}/${pd.rate.queueSize} (rate: ${pd.rate.rate})")
+      demand += peer → pd.copy(pd.queue :+ qr)
+      peer ! qr.request
+    } else {
+      queue :+= qr
     }
   }
 

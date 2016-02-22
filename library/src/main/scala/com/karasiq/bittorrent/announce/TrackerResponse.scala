@@ -5,6 +5,7 @@ import java.net.{InetAddress, InetSocketAddress}
 import akka.util.ByteString
 import com.karasiq.bittorrent.format.BEncodeImplicits._
 import com.karasiq.bittorrent.format._
+import com.karasiq.bittorrent.protocol.BitTorrentTcpProtocol
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
@@ -31,7 +32,7 @@ object TrackerResponse {
     case s: BEncodedString ⇒ // Compact
       def readPort(bytes: ByteString): Int = {
         require(bytes.length == 2)
-        BigInt((ByteString(0, 0) ++ bytes).toArray[Byte]).intValue()
+        BitTorrentTcpProtocol.int32FromBytes(bytes)
       }
 
       @tailrec

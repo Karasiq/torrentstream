@@ -4,14 +4,12 @@ import akka.stream.stage.{Context, PushPullStage, SyncDirective, TerminationDire
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher.DownloadedPiece
 
-import scala.annotation.tailrec
-
 private[torrentstream] class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[TorrentFileOffset]) extends PushPullStage[DownloadedPiece, ByteString] {
   private var currentRange: TorrentFileOffset = ranges.head
 
   private var currentOffset: Long = currentRange.start
 
-  private var buffer = Seq.empty[DownloadedPiece]
+  private var buffer: Seq[DownloadedPiece] = Vector.empty
 
 
   override def onUpstreamFinish(ctx: Context[ByteString]): TerminationDirective = {
@@ -19,11 +17,10 @@ private[torrentstream] class TorrentStreamingStage(pieceLength: Int, private var
     else ctx.finish()
   }
 
-  @tailrec
   private def deliverBuffer(ctx: Context[ByteString]): SyncDirective = buffer match {
     case Seq(DownloadedPiece(index, data), rest @ _*) if (index.toLong * pieceLength) <= currentOffset ⇒
       val pieceOffset = (currentOffset - (index * pieceLength)).toInt
-      val chunkLength = Seq(data.length.toLong - pieceOffset, currentRange.end - currentOffset).min.toInt
+      val chunkLength = Array(data.length.toLong - pieceOffset, currentRange.end - currentOffset).min.toInt
       require(chunkLength > 0)
       buffer = rest
       currentOffset += chunkLength
@@ -34,7 +31,6 @@ private[torrentstream] class TorrentStreamingStage(pieceLength: Int, private var
           ranges = ranges.tail
           currentOffset = currentRange.start
           ctx.push(chunk)
-          deliverBuffer(ctx)
         } else {
           ctx.pushAndFinish(chunk)
         }

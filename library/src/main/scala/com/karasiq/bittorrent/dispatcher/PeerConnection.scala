@@ -43,7 +43,7 @@ object PeerConnectionContext {
   case class PeerContext(downloadQueue: List[QueuedDownload], uploadQueue: List[QueuedUpload], ownData: SeedData, peerData: PeerData, epHandshake: Option[EpHandshake] = None) extends PeerConnectionContext
 }
 
-// TODO: PEX, DHT, UDP trackers
+// TODO: Metadata exchange, DHT, UDP trackers
 class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: InetSocketAddress, initData: SeedData, extMessages: Map[Int, String]) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with ImplicitMaterializer with PeerMessageMatcher {
   import context.system
 

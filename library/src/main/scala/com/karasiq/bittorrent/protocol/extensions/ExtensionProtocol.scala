@@ -5,9 +5,9 @@ import java.nio.ByteBuffer
 
 import akka.util.ByteString
 import com.karasiq.bittorrent.format.{BEncode, BEncodedDictionary, BEncodedNumber, BEncodedString}
-import com.karasiq.bittorrent.protocol.TcpMessageProtocol
+import com.karasiq.bittorrent.protocol.{BitTorrentTcpProtocol, TcpMessageProtocol}
 
-// TODO: LT_metadata
+// TODO: Map(1 -> ut_pex, 6 -> ut_comment, 2 -> ut_metadata, 7 -> lt_donthave, 3 -> upload_only, 4 -> ut_holepunch)
 object ExtensionProtocol {
   val defaultMessages: Map[Int, String] = Map(
     1 → "ut_pex"
@@ -33,7 +33,7 @@ trait ExtensionProtocolTcp { self: ExtensionProtocolMessages ⇒
         case (id, key) ⇒
           key → BEncodedNumber(id)
       })
-      val values = Seq(
+      val values = Vector(
         "m" → Some(messageIds),
         "v" → value.version.map(v ⇒ BEncodedString(ByteString(v))),
         "ipv6" → value.address.collect {
@@ -88,7 +88,7 @@ trait ExtensionProtocolTcp { self: ExtensionProtocolMessages ⇒
 
     override def fromBytes(bs: ByteString): Option[ExtendedMessage] = {
       if (bs.length > 1) {
-        Some(ExtendedMessage(BigInt((ByteString(0, 0, 0) ++ bs.take(1)).toArray).intValue(), bs.drop(1)))
+        Some(ExtendedMessage(BitTorrentTcpProtocol.int32FromBytes(bs.take(1)), bs.drop(1)))
       } else {
         None
       }

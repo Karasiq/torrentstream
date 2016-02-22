@@ -21,7 +21,7 @@ private[torrentstream] object TorrentFileOffset {
     val pieces = TorrentPiece.pieces(torrent.data).filter(_.file == file)
     val start = pieces.headOption.map(p ⇒ pieceOffset(torrent, p).start).getOrElse(0L)
     val end = start + file.size
-    TorrentRangeList(pieces, Seq(TorrentFileOffset(file, start, end)))
+    TorrentRangeList(pieces, Vector(TorrentFileOffset(file, start, end)))
   }
 
   def absoluteOffsets(torrent: Torrent, offsets: Seq[TorrentFileOffset]): TorrentRangeList = {
@@ -34,7 +34,7 @@ private[torrentstream] object TorrentFileOffset {
 
     val absolute = offsets.map {
       case TorrentFileOffset(file, start, end) ⇒
-        TorrentFileOffset(file, Seq(start + fileOffset, 0L).max, Seq(end + fileOffset, pieceOffset(torrent, pieces.last).end).min)
+        TorrentFileOffset(file, Array(start + fileOffset, 0L).max, Array(end + fileOffset, pieceOffset(torrent, pieces.last).end).min)
     }
 
     val boundedPieces = pieces

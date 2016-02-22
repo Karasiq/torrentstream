@@ -8,17 +8,22 @@ import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
 import scala.collection.BitSet
 import scala.util.Try
 
-private[protocol] object BitTorrentTcpProtocol {
+private[bittorrent] object BitTorrentTcpProtocol {
+  def int32FromBytes(bytes: ByteString): Int = {
+    assert(bytes.length <= 4, "Invalid integer length")
+    BigInt((ByteString(Array.fill[Byte](4 - bytes.length)(0)) ++ bytes).toArray).intValue()
+  }
+
   implicit class ByteBufferOps(val bb: ByteBuffer) extends AnyVal {
     def getByteString(size: Int): ByteString = {
-      val array = new Array[Byte](Seq(size, bb.remaining()).min)
+      val array = new Array[Byte](Array(size, bb.remaining()).min)
       bb.get(array)
       ByteString(array)
     }
 
     def getByteInt: Int = {
       val byte = bb.get()
-      BigInt(ByteString(0, 0, 0, byte).toArray).intValue()
+      int32FromBytes(ByteString(byte))
     }
   }
 }
@@ -174,7 +179,7 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
 
     override def fromBytes(bs: ByteString): Option[Port] = {
       Try {
-        Port(BigInt((ByteString(0, 0) ++ bs.take(2)).toArray).intValue())
+        Port(BitTorrentTcpProtocol.int32FromBytes(bs.take(2)))
       }.toOption
     }
   }
