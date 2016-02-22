@@ -10,6 +10,7 @@ import com.karasiq.bittorrent.format.BEncodeImplicits._
 import org.apache.commons.codec.binary.Hex
 import org.apache.commons.io.IOUtils
 
+// TODO: Create metadata from files
 case class Torrent(infoHash: ByteString, announce: String, announceList: Seq[Seq[String]], createdBy: Option[String], comment: Option[String], encoding: Option[String], date: Option[Instant], data: TorrentFiles) {
   val size: Long = data.files.map(_.size).sum
   val pieces: Int = data.pieces.length / 20

@@ -10,10 +10,10 @@ import akka.util.ByteString
 import boopickle.Default._
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.torrentstream.TorrentStream
-import org.apache.commons.codec.binary.Hex
+import com.karasiq.torrentstream.app.AppSerializers.StringInfoHashOps
 import org.apache.commons.io.FilenameUtils
 
-private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) extends AppSerializers {
+private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) extends AppSerializers.Marshallers {
   // Extracts `Range` header value
   private def rangesHeaderValue(torrent: Torrent): Directive1[Vector[(Long, Long)]] = {
     optionalHeaderValueByType[Range]().map {
@@ -30,9 +30,21 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(imp
 
   val route = {
     get {
+      path("info") {
+        parameter('hash) { hash ⇒
+          val torrentId = hash.infoHash
+          validate(store.contains(torrentId), "Unknown torrent info hash") {
+            complete(store.info(torrentId))
+          }
+        } ~
+        parameters('offset.as[Int], 'count.as[Int]) { (offset, count) ⇒
+          complete(store.infoIterator.slice(offset, offset + count).toVector)
+        } ~
+        complete(store.size) // Torrent count
+      } ~
       (path("stream") & parameters('hash, 'file)) { (hash, file) ⇒
-        val torrentId = ByteString(Hex.decodeHex(hash.toCharArray))
-        validate(store.contains(torrentId), "Invalid torrent id") {
+        val torrentId = hash.infoHash
+        validate(store.contains(torrentId), "Unknown torrent info hash") {
           val torrent = store(torrentId)
           rangesHeaderValue(torrent) { ranges ⇒
             createTorrentStream(torrent, file, ranges) { stream ⇒
@@ -48,25 +60,36 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(imp
       } ~
       getFromResourceDirectory("webapp")
     } ~
-      post {
-        (path("upload") & entity(as[ByteString])) { data ⇒
-          Torrent.decode(data) match {
-            case Some(torrent) ⇒
-              if (store.contains(torrent.infoHash)) {
+    post {
+      (path("upload") & entity(as[ByteString])) { data ⇒
+        Torrent.decode(data) match {
+          case Some(torrent) ⇒
+            if (store.contains(torrent.infoHash)) {
+              complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
+            } else {
+              extractLog { log ⇒
+                store += torrent.infoHash → torrent
+                log.info(s"Torrent uploaded: {} {}", torrent.data.name, torrent.infoHashString)
                 complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
-              } else {
-                onSuccess(store.add(torrent)) {
-                  extractLog { log ⇒
-                    log.info(s"Torrent uploaded: {} {}", torrent.data.name, torrent.infoHashString)
-                    complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
-                  }
-                }
               }
+            }
 
-            case None ⇒
-              complete(StatusCodes.BadRequest, "Invalid torrent file")
+          case None ⇒
+            complete(StatusCodes.BadRequest, "Invalid torrent file")
+        }
+      }
+    } ~
+    delete {
+      (path("torrent") & parameter('hash)) { hash ⇒
+        val torrentId = hash.infoHash
+        validate(store.contains(torrentId), "Unknown torrent info hash") {
+          extractLog { log ⇒
+            store -= torrentId
+            log.info("Torrent removed: {}", hash)
+            complete(StatusCodes.OK, "")
           }
         }
       }
+    }
   }
 }
