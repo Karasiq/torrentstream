@@ -17,11 +17,9 @@ final class TorrentInfoPanel(implicit ctx: Ctx.Owner) extends BootstrapComponent
     } else {
       val info = this.torrent().get
       Bootstrap.well(
-        h2("Torrent file info"),
-        hr,
         p(strong("Name: "), info.name),
         p(strong("Info hash: "), info.infoHash),
-        p(strong("Comment: "), info.comment),
+        p(strong("Comment: "), if (info.comment.startsWith("https://") || info.comment.startsWith("http://")) a(href := info.comment, info.comment) else info.comment),
         p(strong("Created by: "), info.createdBy),
         p(strong("Size: "), f"${info.size / 1024.0 / 1024.0}%.2f MB"),
         p(strong("Announce URLs"), ul(info.announceList.flatten.map(url ⇒ li(url)))),

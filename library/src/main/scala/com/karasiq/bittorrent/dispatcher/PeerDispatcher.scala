@@ -10,7 +10,7 @@ import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.protocol.PeerMessages.{PeerHandshake, PieceBlockRequest}
-import com.karasiq.bittorrent.protocol.{PeerMessages, PeerStreamEncryption}
+import com.karasiq.bittorrent.protocol.PeerStreamEncryption
 
 import scala.collection.{BitSet, mutable}
 import scala.concurrent.duration._
@@ -26,8 +26,15 @@ case class UpdateBitField(completed: BitSet) extends PeerDispatcherCommand
 private[dispatcher] final class PeerDispatcherContext(val peers: Map[ActorRef, PeerData]) extends AnyVal
 
 object PeerDispatcher {
+  private val peerIdCharset = ByteString("abcdefghijklmnopqrstuvwxyz" + "1234567890")
+
   def props(torrent: Torrent): Props = {
     Props(classOf[PeerDispatcher], torrent)
+  }
+
+  def generatePeerId(prefix: String): ByteString = {
+    val bs = ByteString(prefix).take(20)
+    bs ++ Array.fill(20 - bs.length)(peerIdCharset(Random.nextInt(peerIdCharset.length)))
   }
 }
 
@@ -36,14 +43,9 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   private val config = context.system.settings.config.getConfig("karasiq.bittorrent.peer-dispatcher")
   private val blockSize = config.getInt("block-size")
   private val maxPeers = config.getInt("max-peers")
-  private val bufferSize = config.getInt("buffer-size")
+  private val bufferSize = config.getInt("buffer-size") / torrent.data.pieceLength
   private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
-  private val peerId: ByteString = {
-    val prefix = ByteString(config.getString("peer-id-prefix"))
-    require(prefix.length < 20, "Invalid peer id prefix")
-    val charset = "abcdefghijklmnopqrstuvwxyz" + "1234567890"
-    prefix ++ Array.fill(20 - prefix.length)(charset(Random.nextInt(charset.length)).toByte)
-  }
+  private val peerId: ByteString = PeerDispatcher.generatePeerId(config.getString("peer-id-prefix"))
 
   private val connectionRequests = mutable.Set.empty[InetSocketAddress]
   private val announcer = context.actorOf(Props[HttpTracker])
@@ -56,7 +58,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     new PeerDispatcherContext(peers)
   }
 
-  def scheduleIdleStop(): Cancellable = {
+  private def scheduleIdleStop(): Cancellable = {
     context.system.scheduler.scheduleOnce(5 minutes, self, PoisonPill)
   }
 

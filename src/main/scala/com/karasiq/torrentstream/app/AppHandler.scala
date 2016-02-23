@@ -86,7 +86,7 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(imp
           extractLog { log ⇒
             store -= torrentId
             log.info("Torrent removed: {}", hash)
-            complete(StatusCodes.OK, "")
+            complete(StatusCodes.OK, hash)
           }
         }
       }

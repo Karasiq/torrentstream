@@ -1,6 +1,6 @@
 import scalatags.Text.all._
 
-object TestPageAssets {
+object TorrentStreamAssets {
   def index: String = {
     "<!DOCTYPE html>" + html(
       head(

@@ -9,13 +9,13 @@ import boopickle.Default._
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.mapdb.{MapDbSingleFileProducer, MapDbWrapper}
 import com.typesafe.config.Config
-import org.apache.commons.codec.binary.Hex
-import org.mapdb.BTreeKeySerializer
+import org.mapdb.BTreeKeySerializer.ArrayKeySerializer
 import org.mapdb.DBMaker.Maker
+import org.mapdb.Serializer
 
 import scala.collection.mutable
 
-final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent] with Closeable {
+final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent] with Closeable with AppSerializers.Picklers {
   private object DbProvider extends MapDbSingleFileProducer(Paths.get(config.getString("karasiq.torrentstream.store.path"))) {
     override protected def setSettings(dbMaker: Maker): Maker = {
       dbMaker
@@ -36,25 +36,25 @@ final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent
     .counterEnable()
   )
 
-  private val infoMap = MapDbWrapper(db).createTreeMap[Long, Set[TorrentInfo]]("torrents_uploaded")(_
-    .keySerializer(BTreeKeySerializer.LONG)
-    .valueSerializer(MapDbBpSerializer[Set[TorrentInfo]])
-    .nodeSize(32)
+  private val infoMap = MapDbWrapper(db).createTreeMap[Array[Any], TorrentInfo]("torrents_info")(_
+    .keySerializer(new ArrayKeySerializer(Serializer.LONG_PACKED, Serializer.INTEGER_PACKED))
+    .valueSerializer(MapDbBpSerializer[TorrentInfo])
     .valuesOutsideNodesEnable()
+    .nodeSize(32)
   )
 
+  private val timeMap = MapDbWrapper(db).createHashMap[ByteString, Long]("torrents_time")(_
+    .keySerializer(MapDbBpSerializer.BYTE_STRING)
+    .valueSerializer(Serializer.LONG_PACKED)
+  )
 
   def info(key: ByteString): TorrentInfo = {
-    TorrentInfo.fromTorrent(map(key))
+    infoMap(Array[Any](timeMap(key), key.hashCode()))
   }
 
   def infoIterator: Iterator[TorrentInfo] = {
     import scala.collection.JavaConversions._
-    infoMap.underlying().descendingMap().valuesIterator.flatten.filter(t ⇒ map.contains(infoHashOf(t)))
-  }
-
-  private def infoHashOf(t: TorrentInfo): ByteString = {
-    ByteString(Hex.decodeHex(t.infoHash.toCharArray))
+    infoMap.underlying().descendingMap().valuesIterator
   }
 
   override def get(key: ByteString): Option[Torrent] = {
@@ -71,30 +71,25 @@ final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent
 
   override def +=(kv: (ByteString, Torrent)): TorrentStore.this.type = {
     val (infoHash, torrent) = kv
-    map += infoHash → torrent
-
-    val now = Instant.now().toEpochMilli
-    infoMap += now → infoMap.get(now).fold(Set(TorrentInfo.fromTorrent(torrent)))(_ + TorrentInfo.fromTorrent(torrent))
+    if (!timeMap.contains(infoHash)) {
+      map += kv
+      val now = Instant.now().toEpochMilli
+      infoMap += (Array[Any](now, infoHash.hashCode()) → TorrentInfo.fromTorrent(torrent))
+      timeMap += infoHash → now
+    }
     this
   }
 
-  override def -=(key: ByteString): TorrentStore.this.type = {
-    map -= key
+  override def -=(infoHash: ByteString): TorrentStore.this.type = {
+    map -= infoHash
+    infoMap -= Array[Any](timeMap.getOrElse(infoHash, 0L), infoHash.hashCode())
+    timeMap -= infoHash
     this
   }
 
   override def size: Int = map.size
 
   override def close(): Unit = {
-    infoMap.iterator.foreach {
-      case (time, ts) ⇒
-        val (keep, drop) = ts.partition(t ⇒ map.contains(infoHashOf(t)))
-        if (keep.isEmpty) {
-          infoMap -= time
-        } else if (drop.nonEmpty) {
-          infoMap += time → keep
-        }
-    }
     DbProvider.close()
   }
 }

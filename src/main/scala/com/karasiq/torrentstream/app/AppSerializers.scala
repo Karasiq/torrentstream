@@ -21,24 +21,26 @@ private[app] object AppSerializers {
     }
   }
 
-  implicit val byteStringPickler: Pickler[ByteString] = new Pickler[ByteString] {
-    override def pickle(obj: ByteString)(implicit state: PickleState): Unit = {
-      state.pickle(obj.toByteBuffer)
+  trait Picklers {
+    implicit val byteStringPickler: Pickler[ByteString] = new Pickler[ByteString] {
+      override def pickle(obj: ByteString)(implicit state: PickleState): Unit = {
+        state.pickle(obj.toByteBuffer)
+      }
+
+      override def unpickle(implicit state: UnpickleState): ByteString = {
+        ByteString(state.unpickle[ByteBuffer])
+      }
     }
 
-    override def unpickle(implicit state: UnpickleState): ByteString = {
-      ByteString(state.unpickle[ByteBuffer])
-    }
-  }
+    implicit val instantPickler: Pickler[Instant] = new Pickler[Instant] {
+      override def pickle(obj: Instant)(implicit state: PickleState): Unit = {
+        state.pickle[Long](obj.getEpochSecond)
+        state.pickle[Int](obj.getNano)
+      }
 
-  implicit val instantPickler: Pickler[Instant] = new Pickler[Instant] {
-    override def pickle(obj: Instant)(implicit state: PickleState): Unit = {
-      state.pickle(obj.getEpochSecond)
-      state.pickle(obj.getNano)
-    }
-
-    override def unpickle(implicit state: UnpickleState): Instant = {
-      Instant.ofEpochSecond(state.unpickle[Long], state.unpickle[Int])
+      override def unpickle(implicit state: UnpickleState): Instant = {
+        Instant.ofEpochSecond(state.unpickle[Long], state.unpickle[Int])
+      }
     }
   }
 }

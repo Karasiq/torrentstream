@@ -45,7 +45,6 @@ lazy val librarySettings = Seq(
     </developers>
 )
 
-import com.karasiq.scalajsbundler.dsl.{Script, _}
 lazy val backendSettings = Seq(
   name := "torrentstream",
   libraryDependencies ++= Seq(
@@ -56,27 +55,40 @@ lazy val backendSettings = Seq(
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main"),
   scalaJsBundlerCompile in Compile <<= (scalaJsBundlerCompile in Compile).dependsOn(fullOptJS in Compile in frontend),
   scalaJsBundlerAssets in Compile += {
-    Bundle("index",
-      // Static
-      Html from TestPageAssets.index,
-      Style from TestPageAssets.style,
+    import com.karasiq.scalajsbundler.ScalaJSBundler.PageContent
+    import com.karasiq.scalajsbundler.dsl._
+    def fontPackage(name: String, baseUrl: String): Seq[PageContent] = {
+      Seq("eot", "svg", "ttf", "woff", "woff2").map { ext ⇒
+        Static(s"fonts/$name.$ext") from url(s"$baseUrl.$ext")
+      }
+    }
 
+    val jsDeps = Seq(
       // jQuery
       Script from url("https://code.jquery.com/jquery-1.12.0.js"),
 
       // Bootstrap
       Style from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/css/bootstrap.css"),
       Script from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/js/bootstrap.js"),
-      Static("fonts/glyphicons-halflings-regular.eot") from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular.eot"),
-      Static("fonts/glyphicons-halflings-regular.svg") from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular.svg"),
-      Static("fonts/glyphicons-halflings-regular.ttf") from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular.ttf"),
-      Static("fonts/glyphicons-halflings-regular.woff") from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular.woff"),
-      Static("fonts/glyphicons-halflings-regular.woff2") from url("https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular.woff2"),
+
+      // Font Awesome
+      Style from url("https://raw.githubusercontent.com/FortAwesome/Font-Awesome/v4.5.0/css/font-awesome.css")
+    )
+
+    val appFiles = Seq(
+      // Static
+      Html from TorrentStreamAssets.index,
+      Style from TorrentStreamAssets.style,
 
       // Scala.js app
       Script from file("frontend") / "target" / "scala-2.11" / "torrentstream-frontend-opt.js",
       Script from file("frontend") / "target" / "scala-2.11" / "torrentstream-frontend-launcher.js"
     )
+
+    val fonts = fontPackage("glyphicons-halflings-regular", "https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular") ++
+      fontPackage("fontawesome-webfont", "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/v4.5.0/fonts/fontawesome-webfont")
+
+    Bundle("index", jsDeps ++ appFiles ++ fonts:_*)
   }
 )
 

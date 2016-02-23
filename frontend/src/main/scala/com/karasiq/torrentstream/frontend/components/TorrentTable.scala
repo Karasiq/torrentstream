@@ -3,6 +3,7 @@ package com.karasiq.torrentstream.frontend.components
 import com.karasiq.bootstrap.BootstrapImplicits._
 import com.karasiq.bootstrap.buttons.{Button, ButtonGroup, ButtonGroupSize, ButtonStyle}
 import com.karasiq.bootstrap.grid.GridSystem
+import com.karasiq.bootstrap.icons.FontAwesome
 import com.karasiq.bootstrap.table.{PagedTable, TableRow}
 import com.karasiq.bootstrap.{Bootstrap, BootstrapComponent}
 import com.karasiq.torrentstream.frontend.{TorrentInfo, TorrentStreamApi}
@@ -16,10 +17,10 @@ final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ct
   private val table = new PagedTable {
     override val currentPage: Var[Int] = Var(1)
 
-    private val torrents = Var(0)
+    val torrentsCount = Var(0)
 
     override val pages: Rx[Int] = Rx {
-      val length = torrents()
+      val length = torrentsCount()
       if (length == 0) {
         1
       } else if (length % perPage == 0) {
@@ -29,25 +30,28 @@ final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ct
       }
     }
 
-    private val torrentInfo = Var(Vector.empty[TorrentInfo])
+    val torrentInfo = Var(Vector.empty[TorrentInfo])
 
     currentPage.foreach(_ ⇒ update())
 
     override val content: Rx[Seq[TableRow]] = Rx {
       torrentInfo().map { info ⇒
         val buttons = ButtonGroup(ButtonGroupSize.small,
-          Button(ButtonStyle.primary)("Show", onclick := Bootstrap.jsClick(_ ⇒ panel.torrent.update(Some(info)))),
-          Button(ButtonStyle.danger)("Remove", onclick := Bootstrap.jsClick { _ ⇒
+          Button(ButtonStyle.primary)("file-text".fontAwesome(FontAwesome.fixedWidth), onclick := Bootstrap.jsClick(_ ⇒ panel.torrent.update(Some(info)))),
+          Button(ButtonStyle.danger)("trash".fontAwesome(FontAwesome.fixedWidth), onclick := Bootstrap.jsClick { _ ⇒
             TorrentStreamApi.remove(info.infoHash).onSuccess {
               case _ ⇒
+                if (panel.torrent.now.contains(info)) {
+                  panel.torrent.update(None)
+                }
                 update()
             }
           })
         )
         TableRow(
           Seq[Modifier](
-            Seq[Modifier](GridSystem.col(2), textAlign.center, buttons),
-            Seq[Modifier](GridSystem.col(10), info.name)
+            Seq[Modifier](GridSystem.col(1), textAlign.center, buttons),
+            Seq[Modifier](GridSystem.col(11), info.name)
           ),
           "success".classIf(Rx(panel.torrent().contains(info)))
         )
@@ -56,8 +60,8 @@ final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ct
 
     override val heading: Rx[Seq[Modifier]] = Rx {
       Seq[Modifier](
-        Seq[Modifier](GridSystem.col(2), "Actions"),
-        Seq[Modifier](GridSystem.col(10), "Name")
+        Seq[Modifier](GridSystem.col(1), "Actions"),
+        Seq[Modifier](GridSystem.col(11), "Name")
       )
     }
 
@@ -73,10 +77,10 @@ final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ct
 
       TorrentStreamApi.uploaded().onComplete {
         case Success(ts) ⇒
-          torrents.update(ts)
+          torrentsCount.update(ts)
 
         case Failure(_) ⇒
-          torrents.update(0)
+          torrentsCount.update(0)
       }
     }
   }
@@ -86,6 +90,6 @@ final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ct
   }
 
   override def render(md: Modifier*): Modifier = {
-    table.renderTag(md:_*)
+    Rx[Frag](if (table.torrentInfo().isEmpty) "" else table.renderTag(md:_*))
   }
 }
