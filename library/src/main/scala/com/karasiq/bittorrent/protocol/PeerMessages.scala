@@ -38,9 +38,7 @@ object PeerMessages extends TcpMessageSpecification with BitTorrentMessages with
 
     sealed class PayloadMatcher[T: TcpMessageReader](id: Int) {
       def unapply(pm: PeerMessage): Option[T] = {
-        for (payload <- Msg.payload[T](pm.payload) if pm.id == id) yield {
-          payload
-        }
+        if (pm.id == id) Msg.payload[T](pm.payload) else None
       }
     }
 
