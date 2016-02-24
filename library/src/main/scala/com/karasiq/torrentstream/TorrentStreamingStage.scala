@@ -4,13 +4,12 @@ import akka.stream.stage.{Context, PushPullStage, SyncDirective, TerminationDire
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher.DownloadedPiece
 
-private[torrentstream] class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[TorrentFileOffset]) extends PushPullStage[DownloadedPiece, ByteString] {
+final class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[TorrentFileOffset]) extends PushPullStage[DownloadedPiece, ByteString] {
   private var currentRange: TorrentFileOffset = ranges.head
 
   private var currentOffset: Long = currentRange.start
 
   private var buffer: Seq[DownloadedPiece] = Vector.empty
-
 
   override def onUpstreamFinish(ctx: Context[ByteString]): TerminationDirective = {
     if (buffer.nonEmpty) ctx.absorbTermination()

@@ -2,15 +2,15 @@ package com.karasiq.torrentstream
 
 import com.karasiq.bittorrent.format.{Torrent, TorrentFile, TorrentPiece}
 
-private[torrentstream] case class TorrentFileOffset(file: TorrentFile, start: Long, end: Long) {
+case class TorrentFileOffset(file: TorrentFile, start: Long, end: Long) {
   require(start <= end, "Invalid range")
 }
 
-private[torrentstream] case class TorrentRangeList(pieces: Seq[TorrentPiece], offsets: Seq[TorrentFileOffset]) {
+case class TorrentRangeList(pieces: Seq[TorrentPiece], offsets: Seq[TorrentFileOffset]) {
   def size: Long = offsets.map(ofs ⇒ ofs.end - ofs.start).sum
 }
 
-private[torrentstream] object TorrentFileOffset {
+object TorrentFileOffset {
   private def pieceOffset(torrent: Torrent, piece: TorrentPiece): TorrentFileOffset = {
     val start = torrent.data.pieceLength.toLong * piece.index
     val end = start + piece.size

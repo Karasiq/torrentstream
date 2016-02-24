@@ -5,7 +5,7 @@ import akka.http.scaladsl.model.headers.{ContentDispositionTypes, Range, `Conten
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, StatusCodes}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server._
-import akka.stream.ActorMaterializer
+import akka.stream.{ActorMaterializer, OverflowStrategy}
 import akka.util.ByteString
 import boopickle.Default._
 import com.karasiq.bittorrent.format.Torrent
@@ -14,6 +14,9 @@ import com.karasiq.torrentstream.app.AppSerializers.StringInfoHashOps
 import org.apache.commons.io.FilenameUtils
 
 private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) extends AppSerializers.Marshallers {
+  private val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
+  private val bufferSize = config.getInt("buffer-size") // In bytes
+
   // Extracts `Range` header value
   private def rangesHeaderValue(torrent: Torrent): Directive1[Vector[(Long, Long)]] = {
     optionalHeaderValueByType[Range]().map {
@@ -49,7 +52,8 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(imp
           rangesHeaderValue(torrent) { ranges ⇒
             createTorrentStream(torrent, file, ranges) { stream ⇒
               respondWithHeader(`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" → FilenameUtils.getName(file)))) {
-                complete(if (ranges.isEmpty) StatusCodes.OK else StatusCodes.PartialContent, HttpEntity(ContentTypes.NoContentType, stream.size, stream.source))
+                val buffered = stream.source.buffer(bufferSize / torrent.data.pieceLength, OverflowStrategy.backpressure)
+                complete(if (ranges.isEmpty) StatusCodes.OK else StatusCodes.PartialContent, HttpEntity(ContentTypes.NoContentType, stream.size, buffered))
               }
             }
           }
