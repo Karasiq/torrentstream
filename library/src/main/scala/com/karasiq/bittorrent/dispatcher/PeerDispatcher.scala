@@ -3,9 +3,9 @@ package com.karasiq.bittorrent.dispatcher
 import java.net.InetSocketAddress
 
 import akka.actor._
-import akka.stream.FlowShape
 import akka.stream.actor.ActorPublisher
 import akka.stream.scaladsl.{Tcp, _}
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings, FlowShape}
 import akka.util.{ByteString, Timeout}
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
 import com.karasiq.bittorrent.format.Torrent
@@ -38,8 +38,10 @@ object PeerDispatcher {
   }
 }
 
-class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash with ImplicitMaterializer {
+class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash {
+  final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
   import context.{dispatcher, system}
+
   private val config = context.system.settings.config.getConfig("karasiq.bittorrent.peer-dispatcher")
   private val blockSize = config.getInt("block-size")
   private val maxPeers = config.getInt("max-peers")
@@ -173,7 +175,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       queue.removePeer(peer)
   }
 
-  private def encryptedConnection(address: InetSocketAddress): Flow[ByteString, ByteString, Unit] = {
+  private def encryptedConnection(address: InetSocketAddress): Flow[ByteString, ByteString, akka.NotUsed] = {
     val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
     Flow.fromGraph(GraphDSL.create() { implicit b ⇒
       import GraphDSL.Implicits._
@@ -194,7 +196,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     })
   }
 
-  private def plainConnection(address: InetSocketAddress): Flow[ByteString, ByteString, Unit] = {
+  private def plainConnection(address: InetSocketAddress): Flow[ByteString, ByteString, akka.NotUsed] = {
     val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
     Flow.fromGraph(GraphDSL.create() { implicit b ⇒
       val messages = b.add(

@@ -1,12 +1,12 @@
 package com.karasiq.torrentstream
 
-import akka.actor.{ActorRef, ActorSystem}
+import akka.actor.ActorRef
 import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.streams.TorrentSource
 
-case class TorrentStream(size: Long, source: Source[ByteString, Unit])
+case class TorrentStream(size: Long, source: Source[ByteString, akka.NotUsed])
 
 object TorrentStream {
   def create(torrentManager: ActorRef, torrent: Torrent, fileName: String, ranges: Seq[(Long, Long)] = Nil): TorrentStream = {

@@ -5,7 +5,8 @@ import java.security.MessageDigest
 import akka.actor.{Actor, ActorLogging, ActorRef, Props}
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
-import akka.stream.scaladsl.{ImplicitMaterializer, Sink}
+import akka.stream.scaladsl.Sink
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher._
 import com.karasiq.bittorrent.format.TorrentPiece
@@ -19,7 +20,9 @@ object PeerPiecePublisher {
   }
 }
 
-class PeerPiecePublisher(peerDispatcher: ActorRef, request: PieceDownloadRequest) extends Actor with ActorLogging with ActorPublisher[DownloadedPiece] with ImplicitMaterializer {
+class PeerPiecePublisher(peerDispatcher: ActorRef, request: PieceDownloadRequest) extends Actor with ActorLogging with ActorPublisher[DownloadedPiece] {
+  final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
+
   private val blockSize = context.system.settings.config.getInt("karasiq.bittorrent.peer-dispatcher.block-size")
   private var piece: Option[DownloadedPiece] = None
 

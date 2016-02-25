@@ -27,16 +27,16 @@ object TorrentSource {
       .actorPublisher[DownloadedPiece](PeerPiecePublisher.props(dispatcher, PieceDownloadRequest(piece)))
   }
 
-  def pieces(dispatcher: ActorRef, pcs: Vector[TorrentPiece]): Source[DownloadedPiece, Unit] = {
+  def pieces(dispatcher: ActorRef, pcs: Vector[TorrentPiece]): Source[DownloadedPiece, akka.NotUsed] = {
     Source(pcs)
       .flatMapMerge(3, { piece ⇒ pieceSource(dispatcher, piece) })
   }
 
-  def torrent(dispatcher: ActorRef, torrent: Torrent): Source[DownloadedPiece, Unit] = {
+  def torrent(dispatcher: ActorRef, torrent: Torrent): Source[DownloadedPiece, akka.NotUsed] = {
     pieces(dispatcher, TorrentPiece.pieces(torrent.data).toVector)
   }
 
-  def dispatcher(torrentManager: ActorRef): Flow[Torrent, PeerDispatcherData, Unit] = {
+  def dispatcher(torrentManager: ActorRef): Flow[Torrent, PeerDispatcherData, akka.NotUsed] = {
     implicit val timeout = Timeout(10 seconds)
     Flow[Torrent]
       .mapAsync(1)(torrent ⇒ (torrentManager ? CreateDispatcher(torrent)).mapTo[PeerDispatcherData])

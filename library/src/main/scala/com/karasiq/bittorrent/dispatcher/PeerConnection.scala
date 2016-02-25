@@ -7,6 +7,7 @@ import akka.actor.{ActorRef, FSM, Props}
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl._
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import akka.util.ByteString
 import com.karasiq.bittorrent.dispatcher.MessageConversions._
 import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
@@ -44,7 +45,8 @@ object PeerConnectionContext {
 }
 
 // TODO: Metadata exchange, DHT, UDP trackers
-class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: InetSocketAddress, initData: SeedData, extMessages: Map[Int, String]) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with ImplicitMaterializer with PeerMessageMatcher {
+class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: InetSocketAddress, initData: SeedData, extMessages: Map[Int, String]) extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with PeerMessageMatcher {
+  final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
   import context.system
 
   // Settings
@@ -411,7 +413,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: In
 }
 
 object PeerConnection {
-  def framing: Flow[ByteString, TopLevelMessage, Unit] = {
+  def framing: Flow[ByteString, TopLevelMessage, akka.NotUsed] = {
     val messageBufferSize: Int = 131072
     Flow[ByteString]
       .transform(() ⇒ new PeerConnectionStage(messageBufferSize))

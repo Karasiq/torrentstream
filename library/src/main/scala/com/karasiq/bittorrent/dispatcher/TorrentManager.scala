@@ -65,7 +65,7 @@ object TorrentManager {
     Props[TorrentManager]
   }
 
-  def listener(manager: ActorRef)(implicit arf: ActorRefFactory, am: ActorMaterializer): Sink[IncomingConnection, Future[Unit]] = {
+  def listener(manager: ActorRef)(implicit arf: ActorRefFactory, am: ActorMaterializer): Sink[IncomingConnection, Future[akka.Done]] = {
     import akka.pattern.ask
     implicit val timeout = Timeout(10 seconds)
 

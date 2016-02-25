@@ -4,13 +4,16 @@ import akka.actor.{Actor, ActorLogging}
 import akka.http.scaladsl._
 import akka.http.scaladsl.model._
 import akka.stream.scaladsl._
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import akka.util.ByteString
 import org.apache.commons.codec.binary.Hex
 
 import scala.util.{Failure, Success}
 
-class HttpTracker extends Actor with ActorLogging with ImplicitMaterializer {
+class HttpTracker extends Actor with ActorLogging {
   import context.dispatcher
+
+  final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
 
   private val http = Http(context.system)
 

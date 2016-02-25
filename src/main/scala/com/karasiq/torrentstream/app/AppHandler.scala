@@ -13,15 +13,24 @@ import com.karasiq.torrentstream.TorrentStream
 import com.karasiq.torrentstream.app.AppSerializers.StringInfoHashOps
 import org.apache.commons.io.FilenameUtils
 
+import scala.language.implicitConversions
+
 private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) extends AppSerializers.Marshallers {
   private val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
   private val bufferSize = config.getInt("buffer-size") // In bytes
 
   // Extracts `Range` header value
   private def rangesHeaderValue(torrent: Torrent): Directive1[Vector[(Long, Long)]] = {
+    implicit def optionalLongToOption(opt: java.util.OptionalLong): Option[Long] = {
+      if (opt.isPresent) Some(opt.getAsLong) else None
+    }
+
     optionalHeaderValueByType[Range]().map {
       case Some(ranges) ⇒
-        ranges.ranges.map(r ⇒ r.getSliceFirst().orElse(r.getOffset()).getOrElse(0L).asInstanceOf[Long] → r.getSliceLast().getOrElse(torrent.size).asInstanceOf[Long]).toVector
+        ranges.ranges.map(r ⇒ {
+          val offset: Option[Long] = r.getOffset()
+          r.getSliceFirst().orElse(offset).getOrElse(0L) → r.getSliceLast().getOrElse(torrent.size)
+        }).toVector
       case None ⇒
         Vector.empty[(Long, Long)]
     }

@@ -4,5 +4,5 @@ scala:
 jdk:
   - oraclejdk8
 script:
- - sbt ++$TRAVIS_SCALA_VERSION bittorrent/test
+ - sbt ++$TRAVIS_SCALA_VERSION compile bittorrent/test
 sudo: false

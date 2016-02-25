@@ -8,12 +8,12 @@ lazy val commonSettings = Seq(
 lazy val librarySettings = Seq(
   name := "bittorrent",
   libraryDependencies ++= {
-    val akkaV = "2.4.1"
+    val akkaV = "2.4.2"
     Seq(
       "com.typesafe.akka" %% "akka-actor" % akkaV,
       "org.scalatest" %% "scalatest" % "2.2.4" % "test",
-      "com.typesafe.akka" %% "akka-stream-experimental" % "2.0.3",
-      "com.typesafe.akka" %% "akka-http-experimental" % "2.0.3",
+      "com.typesafe.akka" %% "akka-stream" % akkaV,
+      "com.typesafe.akka" %% "akka-http-experimental" % akkaV,
       "commons-codec" % "commons-codec" % "1.8",
       "commons-io" % "commons-io" % "2.4",
       "org.parboiled" %% "parboiled" % "2.1.1",
