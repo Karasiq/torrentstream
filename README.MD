@@ -1,4 +1,4 @@
-# TorrentStream [![Build Status](https://travis-ci.org/Karasiq/torrentstream.svg?branch=master)](https://travis-ci.org/Karasiq/torrentstream) [![Build status](https://ci.appveyor.com/api/projects/status/g0mhnch5dchsc68n/branch/master?svg=true)](https://ci.appveyor.com/project/Karasiq/torrentstream/branch/master)
+# TorrentStream [![Build Status](https://travis-ci.org/Karasiq/torrentstream.svg?branch=master)](https://travis-ci.org/Karasiq/torrentstream) [![Build status](https://ci.appveyor.com/api/projects/status/g0mhnch5dchsc68n/branch/master?svg=true)](https://ci.appveyor.com/project/Karasiq/torrentstream/branch/master) [![Dependencies](https://app.updateimpact.com/badge/692686982173822976/torrentstream.svg?config=compile)](https://app.updateimpact.com/latest/692686982173822976/torrentstream)
 TorrentStream is a torrent streaming engine, written in [Scala](http://scala-lang.org/) and based on [akka-streams](http://doc.akka.io/docs/akka-stream-and-http-experimental/current/scala/stream-index.html).
 
 # How to use
