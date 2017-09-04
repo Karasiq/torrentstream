@@ -2,20 +2,21 @@ package com.karasiq.bittorrent.dispatcher
 
 import java.net.InetSocketAddress
 
-import akka.actor._
-import akka.stream.actor.ActorPublisher
-import akka.stream.scaladsl.{Tcp, _}
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings, FlowShape}
-import akka.util.{ByteString, Timeout}
-import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
-import com.karasiq.bittorrent.format.Torrent
-import com.karasiq.bittorrent.protocol.PeerMessages.{PeerHandshake, PieceBlockRequest}
-import com.karasiq.bittorrent.protocol.PeerStreamEncryption
-
-import scala.collection.{BitSet, mutable}
+import scala.collection.{mutable, BitSet}
 import scala.concurrent.duration._
 import scala.language.postfixOps
 import scala.util.{Failure, Random, Success}
+
+import akka.actor._
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings, FlowShape}
+import akka.stream.actor.ActorPublisher
+import akka.stream.scaladsl.{Tcp, _}
+import akka.util.{ByteString, Timeout}
+
+import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
+import com.karasiq.bittorrent.format.Torrent
+import com.karasiq.bittorrent.protocol.PeerStreamEncryption
+import com.karasiq.bittorrent.protocol.PeerMessages.{PeerHandshake, PieceBlockRequest}
 
 sealed trait PeerDispatcherCommand
 case class ConnectPeer(address: InetSocketAddress) extends PeerDispatcherCommand
@@ -70,6 +71,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   override def preStart(): Unit = {
     super.preStart()
     (torrent.announceList.flatten :+ torrent.announce).distinct
+      .filter(url => url.startsWith("http://") || url.startsWith("https://"))
       .foreach(url ⇒ self ! TrackerRequest(url, torrent.infoHash, peerId, ownAddress.getPort, 0, 0, 0))
   }
 

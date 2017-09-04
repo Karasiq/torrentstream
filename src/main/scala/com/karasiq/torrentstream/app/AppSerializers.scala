@@ -51,7 +51,7 @@ private object MapDbBpSerializer {
 
   import org.mapdb.{DataIO, Serializer}
 
-  def apply[T: Pickler] = new Serializer[T] {
+  def apply[T: Pickler]: Serializer[T] = new Serializer[T] {
     override def serialize(out: DataOutput, value: T): Unit = {
       val data = Pickle[T](value).toByteBuffer
       DataIO.packInt(out, data.remaining())
