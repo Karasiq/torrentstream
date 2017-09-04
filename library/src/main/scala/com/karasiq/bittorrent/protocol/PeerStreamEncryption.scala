@@ -1,11 +1,16 @@
 package com.karasiq.bittorrent.protocol
 
+import javax.crypto.KeyAgreement
+import javax.crypto.spec.{DHParameterSpec, DHPublicKeySpec}
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.security._
 import java.util.concurrent.TimeoutException
-import javax.crypto.KeyAgreement
-import javax.crypto.spec.{DHParameterSpec, DHPublicKeySpec}
+
+import scala.annotation.tailrec
+import scala.concurrent.duration._
+import scala.language.postfixOps
+import scala.util.Try
 
 import akka.event.LoggingAdapter
 import akka.stream._
@@ -15,41 +20,45 @@ import org.bouncycastle.crypto.engines.RC4Engine
 import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.jcajce.provider.asymmetric.dh.BCDHPublicKey
 
-import scala.annotation.tailrec
-import scala.concurrent.duration._
-import scala.language.postfixOps
-import scala.util.Try
-
 private[protocol] object PeerStreamEncryption {
-  private val provider = new org.bouncycastle.jce.provider.BouncyCastleProvider()
+  private val CryptoProvider = new org.bouncycastle.jce.provider.BouncyCastleProvider()
 
-  private val p = BigInt("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A63A36210000000000090563", 16)
-  private val g = BigInt(2)
+  private object DHKeys {
+    private[this] val P = BigInt("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A63A36210000000000090563", 16)
+    private[this] val G = BigInt(2)
 
-  private val generator = {
-    val generator = KeyPairGenerator.getInstance("DH", provider)
-    generator.initialize(new DHParameterSpec(p.underlying(), g.underlying(), 160))
-    generator
-  }
+    private[this] val generator = {
+      val generator = KeyPairGenerator.getInstance("DH", CryptoProvider)
+      generator.initialize(new DHParameterSpec(P.underlying(), G.underlying(), 160))
+      generator
+    }
 
-  @tailrec
-  def generateKey(): KeyPair = {
-    val kp = generator.generateKeyPair()
-    if (kp.getPublic.asInstanceOf[BCDHPublicKey].getY.toByteArray.length == 96) {
-      kp
-    } else {
-      // Retry
-      generateKey()
+    def generateKey(): KeyPair = {
+      @tailrec
+      def generateKeyRec(retries: Int = 0): KeyPair = {
+        val keyPair = generator.generateKeyPair()
+        val keyBytes = keyPair.getPublic.asInstanceOf[BCDHPublicKey].getY.toByteArray
+        if (keyBytes.length == 96) {
+          keyPair
+        } else {
+          // Retry
+          require(retries < 1000, "Unable to generate valid DH key pair")
+          generateKeyRec(retries + 1)
+        }
+      }
+
+      generateKeyRec()
+    }
+
+    def tryReadKey(bytes: ByteString): Option[PublicKey] = {
+      val generator = KeyFactory.getInstance("DH", CryptoProvider)
+      val keySpec = new DHPublicKeySpec(BigInt(bytes.toArray).underlying(), P.underlying(), G.underlying())
+      Try(generator.generatePublic(keySpec)).toOption
     }
   }
 
-  def readKey(bytes: ByteString): Option[PublicKey] = {
-    val generator = KeyFactory.getInstance("DH", provider)
-    Try(generator.generatePublic(new DHPublicKeySpec(BigInt(bytes.toArray).underlying(), p.underlying(), g.underlying()))).toOption
-  }
-
   def sha1(data: ByteString): ByteString = {
-    val md = MessageDigest.getInstance("SHA-1", provider)
+    val md = MessageDigest.getInstance("SHA-1", CryptoProvider)
     ByteString(md.digest(data.toArray))
   }
 }
@@ -62,7 +71,7 @@ private[protocol] object PeerStreamEncryption {
   */
 class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) extends GraphStage[BidiShape[ByteString, ByteString, ByteString, ByteString]] {
   // TODO: Server mode
-  import PeerStreamEncryption.{readKey, sha1}
+  import PeerStreamEncryption.{sha1, DHKeys}
 
   val tcpInput: Inlet[ByteString] = Inlet("TcpInput")
   val messageInput: Inlet[ByteString] = Inlet("MessageInput")
@@ -75,19 +84,19 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
     object Stage extends Enumeration {
-      val CLIENT_DH, CLIENT_AWAIT_DH, CLIENT_AWAIT_CONFIRMATION = Value
-      val SERVER_AWAIT_DH, SERVER_AWAIT_CONFIRMATION = Value
-      val READY = Value
+      val ClientDH, ClientAwaitDH, ClientAwaitConfirmation = Value
+      val ServerAwaitDH, ServerAwaitConfirmation = Value
+      val Ready = Value
     }
 
-    var stage = Stage.CLIENT_DH
+    var stage = Stage.ClientDH
     var rc4Enabled = false
 
     var messageInputBuffer = Vector.empty[ByteString]
     var tcpInputBuffer = ByteString.empty // Input buffer
 
-    val key = PeerStreamEncryption.generateKey()
-    val dh = KeyAgreement.getInstance("DH", PeerStreamEncryption.provider)
+    val key = DHKeys.generateKey()
+    val dh = KeyAgreement.getInstance("DH", PeerStreamEncryption.CryptoProvider)
     dh.init(key.getPrivate)
 
     val ownRc4Engine = new RC4Engine
@@ -134,14 +143,14 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
     def sendPublicKey(): Unit = {
       val bytes = ByteString(key.getPublic.asInstanceOf[BCDHPublicKey].getY.toByteArray)
       emit(tcpOutput, bytes ++ randomPadding)
-      stage = Stage.CLIENT_AWAIT_DH
+      stage = Stage.ClientAwaitDH
     }
 
     def clientStage2(): Unit = {
       if (tcpInputBuffer.length >= 96 && messageInputBuffer.nonEmpty) {
         val (take, keep) = tcpInputBuffer.splitAt(96)
         tcpInputBuffer = keep
-        readKey(take) match {
+        DHKeys.tryReadKey(take) match {
           case Some(bKey) ⇒
             val handshake: ByteString = {
               if (messageInputBuffer.nonEmpty) {
@@ -179,7 +188,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
               rc4Encrypt(ByteString(buffer))
             }
             emit(tcpOutput, hash1 ++ hash2 ++ encrypted)
-            stage = Stage.CLIENT_AWAIT_CONFIRMATION
+            stage = Stage.ClientAwaitConfirmation
 
           case None ⇒
             failStage(new IOException("Invalid DH key"))
@@ -218,7 +227,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
           failStage(new IOException("No known encryption methods available"))
         }
         log.debug("Peer message stream encryption mode set to {}", if (rc4Enabled) "RC4" else "plaintext")
-        stage = Stage.READY
+        stage = Stage.Ready
         emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer)
         tcpInputBuffer = ByteString.empty
       }
@@ -232,18 +241,18 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
         }
         tcpInputBuffer ++= bytes
         stage match {
-          case Stage.CLIENT_DH ⇒
+          case Stage.ClientDH ⇒
             // Nothing
 
-          case Stage.CLIENT_AWAIT_DH ⇒
+          case Stage.ClientAwaitDH ⇒
             clientStage2()
             pull(tcpInput)
 
-          case Stage.CLIENT_AWAIT_CONFIRMATION ⇒
+          case Stage.ClientAwaitConfirmation ⇒
             clientStage3()
             pull(tcpInput)
 
-          case Stage.READY ⇒
+          case Stage.Ready ⇒
             emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
             tcpInputBuffer = ByteString.empty
         }
@@ -252,7 +261,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
 
     setHandler(tcpOutput, new OutHandler {
       override def onPull(): Unit = {
-        if (stage == Stage.CLIENT_DH) {
+        if (stage == Stage.ClientDH) {
           sendPublicKey()
           pull(tcpInput)
         } else if (!hasBeenPulled(messageInput)) {
@@ -263,7 +272,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
 
     setHandler(messageInput, new InHandler {
       override def onPush(): Unit = {
-        if (stage != Stage.READY || !isAvailable(tcpOutput)) {
+        if (stage != Stage.Ready || !isAvailable(tcpOutput)) {
           messageInputBuffer :+= grab(messageInput)
         } else {
           emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput)).map(msg ⇒ if (rc4Enabled) rc4Encrypt(msg) else msg), () ⇒ if (!hasBeenPulled(messageInput)) tryPull(messageInput))
@@ -274,14 +283,14 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
 
     setHandler(messageOutput, new OutHandler {
       override def onPull(): Unit = {
-        if (stage == Stage.READY && !hasBeenPulled(tcpInput)) {
+        if (stage == Stage.Ready && !hasBeenPulled(tcpInput)) {
           pull(tcpInput)
         }
       }
     })
 
     override protected def onTimer(timerKey: Any): Unit = {
-      if (stage != Stage.READY) {
+      if (timerKey == "HandshakeTimeout" && stage != Stage.Ready) {
         failStage(new TimeoutException("Handshake timeout"))
       }
     }

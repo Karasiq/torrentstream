@@ -1,56 +1,72 @@
 package com.karasiq.torrentstream
 
-import akka.stream.stage.{Context, PushPullStage, SyncDirective, TerminationDirective}
+import akka.NotUsed
+import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
+import akka.stream.scaladsl.Flow
+import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
 import akka.util.ByteString
+
 import com.karasiq.bittorrent.dispatcher.DownloadedPiece
 
-final class TorrentStreamingStage(pieceLength: Int, private var ranges: Seq[TorrentFileOffset]) extends PushPullStage[DownloadedPiece, ByteString] {
-  private var currentRange: TorrentFileOffset = ranges.head
-
-  private var currentOffset: Long = currentRange.start
-
-  private var buffer: Seq[DownloadedPiece] = Vector.empty
-
-  override def onUpstreamFinish(ctx: Context[ByteString]): TerminationDirective = {
-    if (buffer.nonEmpty) ctx.absorbTermination()
-    else ctx.finish()
+object TorrentStreamingStage {
+  def apply(pieceLength: Int, ranges: Seq[TorrentFileOffset]): Flow[DownloadedPiece, ByteString, NotUsed] = {
+    Flow.fromGraph(new TorrentStreamingStage(pieceLength, ranges))
   }
+}
 
-  private def deliverBuffer(ctx: Context[ByteString]): SyncDirective = buffer match {
-    case Seq(DownloadedPiece(index, data), rest @ _*) if (index.toLong * pieceLength) <= currentOffset ⇒
-      val pieceOffset = (currentOffset - (index * pieceLength)).toInt
-      val chunkLength = Array(data.length.toLong - pieceOffset, currentRange.end - currentOffset).min.toInt
-      require(chunkLength > 0)
-      buffer = rest
-      currentOffset += chunkLength
-      val chunk = data.slice(pieceOffset, pieceOffset + chunkLength)
-      if (currentOffset >= currentRange.end) {
-        if (ranges.tail.nonEmpty) {
-          currentRange = ranges.tail.head
-          ranges = ranges.tail
-          currentOffset = currentRange.start
-          ctx.push(chunk)
+private final class TorrentStreamingStage(pieceLength: Int, _ranges: Seq[TorrentFileOffset]) extends GraphStage[FlowShape[DownloadedPiece, ByteString]] {
+  val inlet = Inlet[DownloadedPiece]("TorrentStreamingStage.in")
+  val outlet = Outlet[ByteString]("TorrentStreamingStage.out")
+  val shape = FlowShape(inlet, outlet)
+
+  def createLogic(inheritedAttributes: Attributes) = new GraphStageLogic(shape) with InHandler with OutHandler {
+    private[this] var ranges = _ranges
+    private[this] var currentRange: TorrentFileOffset = ranges.head
+    private[this] var currentOffset: Long = currentRange.start
+    private[this] var buffer: Seq[DownloadedPiece] = Nil
+
+    def onPull(): Unit = {
+      deliverBuffer()
+    }
+
+    def onPush(): Unit = {
+      val element = grab(inlet)
+      buffer = (buffer :+ element).sortBy(_.pieceIndex)
+      deliverBuffer()
+    }
+
+    override def onUpstreamFinish(): Unit = {
+      if (buffer.isEmpty) super.onUpstreamFinish()
+    }
+
+    private def deliverBuffer(): Unit = buffer match {
+      case DownloadedPiece(index, data) +: bufferTail if (index.toLong * pieceLength) <= currentOffset ⇒
+        val pieceOffset = (currentOffset - (index * pieceLength)).toInt
+        val chunkLength = Array(data.length.toLong - pieceOffset, currentRange.end - currentOffset).min.toInt
+        require(chunkLength > 0)
+
+        buffer = bufferTail
+        currentOffset += chunkLength
+
+        val chunk = data.slice(pieceOffset, pieceOffset + chunkLength)
+        if (currentOffset >= currentRange.end) {
+          if (ranges.tail.nonEmpty) {
+            ranges = ranges.tail
+            currentRange = ranges.head
+            currentOffset = currentRange.start
+            push(outlet, chunk)
+          } else {
+            push(outlet, chunk)
+            complete(outlet)
+          }
         } else {
-          ctx.pushAndFinish(chunk)
+          push(outlet, chunk)
         }
-      } else {
-        ctx.push(chunk)
-      }
 
-    case _ ⇒
-      if (ctx.isFinishing) {
-        ctx.finish()
-      } else {
-        ctx.pull()
-      }
-  }
+      case _ ⇒
+        if (isClosed(inlet)) complete(outlet) else pull(inlet)
+    }
 
-  override def onPush(elem: DownloadedPiece, ctx: Context[ByteString]): SyncDirective = {
-    buffer = (buffer :+ elem).sortBy(_.pieceIndex)
-    deliverBuffer(ctx)
-  }
-
-  override def onPull(ctx: Context[ByteString]): SyncDirective = {
-    deliverBuffer(ctx)
+    setHandlers(inlet, outlet, this)
   }
 }

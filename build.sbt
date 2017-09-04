@@ -1,25 +1,11 @@
 lazy val commonSettings = Seq(
   organization := "com.github.karasiq",
   isSnapshot := false,
-  version := "1.0.2",
-  scalaVersion := "2.11.7"
+  version := "1.0.3",
+  scalaVersion := "2.11.8"
 )
 
-lazy val librarySettings = Seq(
-  name := "bittorrent",
-  libraryDependencies ++= {
-    val akkaV = "2.4.2"
-    Seq(
-      "com.typesafe.akka" %% "akka-actor" % akkaV,
-      "org.scalatest" %% "scalatest" % "2.2.4" % "test",
-      "com.typesafe.akka" %% "akka-stream" % akkaV,
-      "com.typesafe.akka" %% "akka-http-experimental" % akkaV,
-      "commons-codec" % "commons-codec" % "1.8",
-      "commons-io" % "commons-io" % "2.4",
-      "org.parboiled" %% "parboiled" % "2.1.1",
-      "org.bouncycastle" % "bcprov-jdk15on" % "1.52"
-    )
-  },
+lazy val publishSettings = Seq(
   publishMavenStyle := true,
   publishTo := {
     val nexus = "https://oss.sonatype.org/"
@@ -43,6 +29,25 @@ lazy val librarySettings = Seq(
         <url>https://github.com/Karasiq</url>
       </developer>
     </developers>
+)
+
+lazy val librarySettings = Seq(
+  name := "bittorrent",
+  crossScalaVersions := Seq("2.11.8", "2.12.1"),
+  libraryDependencies ++= {
+    val akkaV = "2.5.4"
+    val akkaHttpV = "10.0.10"
+    Seq(
+      "com.typesafe.akka" %% "akka-actor" % akkaV,
+      "org.scalatest" %% "scalatest" % "2.2.4" % "test",
+      "com.typesafe.akka" %% "akka-stream" % akkaV,
+      "com.typesafe.akka" %% "akka-http" % akkaHttpV,
+      "commons-codec" % "commons-codec" % "1.8",
+      "commons-io" % "commons-io" % "2.4",
+      "org.parboiled" %% "parboiled" % "2.1.1",
+      "org.bouncycastle" % "bcprov-jdk15on" % "1.52"
+    )
+  }
 )
 
 lazy val backendSettings = Seq(
@@ -102,7 +107,7 @@ lazy val frontendSettings = Seq(
 )
 
 lazy val library = Project("bittorrent", file("library"))
-  .settings(commonSettings, librarySettings)
+  .settings(commonSettings, librarySettings, publishSettings)
 
 lazy val backend = Project("torrentstream", file("."))
   .dependsOn(library)

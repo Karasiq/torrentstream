@@ -30,7 +30,7 @@ object PeerDispatcher {
   private val peerIdCharset = ByteString("abcdefghijklmnopqrstuvwxyz" + "1234567890")
 
   def props(torrent: Torrent): Props = {
-    Props(classOf[PeerDispatcher], torrent)
+    Props(new PeerDispatcher(torrent))
   }
 
   def generatePeerId(prefix: String): ByteString = {
@@ -48,7 +48,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   private val maxPeers = config.getInt("max-peers")
   private val bufferSize = config.getInt("buffer-size") / torrent.data.pieceLength
   private val ownAddress = new InetSocketAddress(config.getString("listen-host"), config.getInt("listen-port"))
-  private val peerId: ByteString = PeerDispatcher.generatePeerId(config.getString("peer-id-prefix"))
+  private val peerId = PeerDispatcher.generatePeerId(config.getString("peer-id-prefix"))
 
   private val connectionRequests = mutable.Set.empty[InetSocketAddress]
   private val announcer = context.actorOf(Props[HttpTracker])
@@ -179,7 +179,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
 
   private def encryptedConnection(address: InetSocketAddress): Flow[ByteString, ByteString, akka.NotUsed] = {
     val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
-    Flow.fromGraph(GraphDSL.create() { implicit b ⇒
+    val graph = GraphDSL.create() { implicit b ⇒
       import GraphDSL.Implicits._
       val messages = b.add(
         Flow[ByteString]
@@ -195,12 +195,13 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       encryption.out1 ~> messages.in
       output.out ~> encryption.in2
       FlowShape(encryption.in1, encryption.out2)
-    })
+    }
+    Flow.fromGraph(graph).named("encryptedConnection")
   }
 
   private def plainConnection(address: InetSocketAddress): Flow[ByteString, ByteString, akka.NotUsed] = {
     val messageProcessor = context.actorOf(PeerConnection.props(self, torrent, address, ownData))
-    Flow.fromGraph(GraphDSL.create() { implicit b ⇒
+    val graph = GraphDSL.create() { implicit b ⇒
       val messages = b.add(
         Flow[ByteString]
           .via(PeerConnection.framing)
@@ -212,6 +213,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
           // .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
       )
       FlowShape(messages.in, output.out)
-    })
+    }
+    Flow.fromGraph(graph).named("plainConnection")
   }
 }

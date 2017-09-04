@@ -3,24 +3,25 @@ package com.karasiq.bittorrent.dispatcher
 import java.io.IOException
 import java.net.InetSocketAddress
 
-import akka.actor.{ActorRef, FSM, Props}
-import akka.stream.actor.ActorPublisher
-import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
-import akka.stream.scaladsl._
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
-import akka.util.ByteString
-import com.karasiq.bittorrent.dispatcher.MessageConversions._
-import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
-import com.karasiq.bittorrent.dispatcher.PeerConnectionState._
-import com.karasiq.bittorrent.format.Torrent
-import com.karasiq.bittorrent.protocol.PeerMessages._
-import com.karasiq.bittorrent.protocol.extensions.ExtensionProtocol
-import com.karasiq.bittorrent.protocol.{PeerConnectionStage, PeerMessageId, TcpMessageWriter}
-
 import scala.annotation.tailrec
 import scala.collection.BitSet
 import scala.concurrent.duration._
 import scala.language.postfixOps
+
+import akka.actor.{ActorRef, FSM, Props}
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
+import akka.stream.actor.ActorPublisher
+import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
+import akka.stream.scaladsl._
+import akka.util.ByteString
+
+import com.karasiq.bittorrent.dispatcher.MessageConversions._
+import com.karasiq.bittorrent.dispatcher.PeerConnectionContext._
+import com.karasiq.bittorrent.dispatcher.PeerConnectionState._
+import com.karasiq.bittorrent.format.Torrent
+import com.karasiq.bittorrent.protocol.{PeerConnectionStage, PeerMessageId, TcpMessageWriter}
+import com.karasiq.bittorrent.protocol.PeerMessages._
+import com.karasiq.bittorrent.protocol.extensions.ExtensionProtocol
 
 sealed trait PeerEvent {
   def data: PeerData
@@ -416,10 +417,11 @@ object PeerConnection {
   def framing: Flow[ByteString, TopLevelMessage, akka.NotUsed] = {
     val messageBufferSize: Int = 131072
     Flow[ByteString]
-      .transform(() ⇒ new PeerConnectionStage(messageBufferSize))
+      .via(PeerConnectionStage(messageBufferSize))
+      .named("peerConnectionFraming")
   }
 
   def props(peerDispatcher: ActorRef, torrent: Torrent, peerAddress: InetSocketAddress, initData: SeedData, extMessages: Map[Int, String] = ExtensionProtocol.defaultMessages): Props = {
-    Props(classOf[PeerConnection], peerDispatcher, torrent, peerAddress, initData, extMessages)
+    Props(new PeerConnection(peerDispatcher, torrent, peerAddress, initData, extMessages))
   }
 }

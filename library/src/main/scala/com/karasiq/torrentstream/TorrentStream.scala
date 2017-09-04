@@ -3,6 +3,7 @@ package com.karasiq.torrentstream
 import akka.actor.ActorRef
 import akka.stream.scaladsl.Source
 import akka.util.ByteString
+
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.streams.TorrentSource
 
@@ -19,7 +20,7 @@ object TorrentStream {
     val source = Source.single(torrent)
       .via(TorrentSource.dispatcher(torrentManager))
       .flatMapConcat(dsp ⇒ TorrentSource.pieces(dsp.actorRef, pieces.pieces.toVector))
-      .transform(() ⇒ new TorrentStreamingStage(torrent.data.pieceLength, pieces.offsets))
+      .via(TorrentStreamingStage(torrent.data.pieceLength, pieces.offsets))
 
     TorrentStream(pieces.size, source)
   }

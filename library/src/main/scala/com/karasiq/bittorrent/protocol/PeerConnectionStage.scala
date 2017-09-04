@@ -2,73 +2,92 @@ package com.karasiq.bittorrent.protocol
 
 import java.io.IOException
 
-import akka.stream.stage._
-import akka.util.ByteString
-import com.karasiq.bittorrent.protocol.PeerMessages._
-
 import scala.annotation.tailrec
 
-private[bittorrent] class PeerConnectionStage(maxBufferSize: Int) extends PushPullStage[ByteString, TopLevelMessage] with PeerMessageMatcher {
-  private var handshake = true
-  private var buffer = ByteString.empty
+import akka.NotUsed
+import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
+import akka.stream.scaladsl.Flow
+import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
+import akka.util.ByteString
 
-  override def onUpstreamFinish(ctx: Context[TopLevelMessage]): TerminationDirective = {
-    if (buffer.isEmpty) ctx.finish()
-    else ctx.absorbTermination()
+import com.karasiq.bittorrent.protocol.PeerMessages._
+
+object PeerConnectionStage {
+  private val KeepAliveBytes = ByteString(0, 0, 0, 0)
+
+  def apply(maxBufferSize: Int): Flow[ByteString, TopLevelMessage, NotUsed] = {
+    Flow.fromGraph(new PeerConnectionStage(maxBufferSize))
   }
+}
 
-  @tailrec
-  private def readMessage(): Option[TopLevelMessage] = {
-    if (handshake) {
-      buffer match {
-        case Handshake(hs: PeerHandshake) ⇒
-          buffer = buffer.drop(hs.length)
-          handshake = false
-          Some(hs)
+private final class PeerConnectionStage(maxBufferSize: Int)
+  extends GraphStage[FlowShape[ByteString, TopLevelMessage]] with PeerMessageMatcher {
 
-        case _ ⇒
-          None
+  val inlet = Inlet[ByteString]("PeerConnectionStage.in")
+  val outlet = Outlet[TopLevelMessage]("PeerConnectionStage.out")
+  val shape = FlowShape(inlet, outlet)
+
+  def createLogic(inheritedAttributes: Attributes) = new GraphStageLogic(shape) with InHandler with OutHandler {
+    private[this] var handshake = true
+    private[this] var buffer = ByteString.empty
+
+    def onPull(): Unit = {
+      deliverMessage()
+    }
+
+    def onPush(): Unit = {
+      val element = grab(inlet)
+      if (buffer.length > maxBufferSize) {
+        failStage(new IOException("Buffer overflow"))
+      } else {
+        buffer ++= element
+        deliverMessage()
       }
-    } else {
-      buffer match {
-        case Msg(message) if message.length - 1 == message.payload.length ⇒
-          buffer = buffer.drop(message.length + 4)
-          Some(message)
+    }
 
-        case bs if bs.take(4) == ByteString(0, 0, 0, 0) ⇒
-          // Keep-alive
-          buffer = buffer.drop(4)
-          readMessage()
+    override def onUpstreamFinish(): Unit = {
+      if (buffer.isEmpty) super.onUpstreamFinish()
+    }
 
-        case _ ⇒
-          None
+    @tailrec
+    private[this] def readMessage(): Option[TopLevelMessage] = {
+      if (handshake) {
+        buffer match {
+          case Handshake(hs: PeerHandshake) ⇒
+            buffer = buffer.drop(hs.length)
+            handshake = false
+            Some(hs)
+
+          case _ ⇒
+            None
+        }
+      } else {
+        buffer match {
+          case Msg(message) if message.length - 1 == message.payload.length ⇒
+            buffer = buffer.drop(message.length + 4)
+            Some(message)
+
+          case bs if bs.take(4) == PeerConnectionStage.KeepAliveBytes ⇒
+            // Keep-alive
+            buffer = buffer.drop(4)
+            readMessage()
+
+          case _ ⇒
+            None
+        }
       }
     }
-  }
 
-  private def deliverMessage(ctx: Context[TopLevelMessage]): SyncDirective = {
-    readMessage() match {
-      case Some(message) ⇒
-        ctx.push(message)
+    private[this] def deliverMessage(): Unit = {
+      readMessage() match {
+        case Some(message) ⇒
+          push(outlet, message)
 
-      case None if ctx.isFinishing ⇒
-        ctx.finish()
-
-      case None ⇒
-        ctx.pull()
+        case None ⇒
+          if (!isClosed(inlet)) pull(inlet) else complete(outlet)
+      }
     }
-  }
 
-  override def onPush(elem: ByteString, ctx: Context[TopLevelMessage]): SyncDirective = {
-    if (buffer.length > maxBufferSize) {
-      ctx.fail(new IOException("Buffer overflow"))
-    } else {
-      buffer ++= elem
-      deliverMessage(ctx)
-    }
-  }
-
-  override def onPull(ctx: Context[TopLevelMessage]): SyncDirective = {
-    deliverMessage(ctx)
+    setHandlers(inlet, outlet, this)
   }
 }
