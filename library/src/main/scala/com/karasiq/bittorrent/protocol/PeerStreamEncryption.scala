@@ -23,15 +23,13 @@ import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.jcajce.provider.asymmetric.dh.BCDHPublicKey
 
 object PeerStreamEncryption {
-  private val CryptoProvider = new org.bouncycastle.jce.provider.BouncyCastleProvider()
+  private val RC4SkipBytes = 1024
+  private val VerificationConstant = ByteString(0, 0, 0, 0, 0, 0, 0, 0) // Verification constant, 8 bytes
+  private val cryptoProvider = new org.bouncycastle.jce.provider.BouncyCastleProvider()
+  private val secureRandom = new SecureRandom()
 
   def apply(infoHash: ByteString)(implicit log: LoggingAdapter): BidiFlow[ByteString, ByteString, ByteString, ByteString, NotUsed] = {
     BidiFlow.fromGraph(new PeerStreamEncryption(infoHash)).named("peerStreamEncryption")
-  }
-
-  private def sha1(data: ByteString): ByteString = {
-    val md = MessageDigest.getInstance("SHA-1", CryptoProvider)
-    ByteString(md.digest(data.toArray))
   }
 
   object DHKeys {
@@ -43,13 +41,13 @@ object PeerStreamEncryption {
 
     // Key generators
     private[this] val generator = {
-      val generator = KeyPairGenerator.getInstance("DH", CryptoProvider)
+      val generator = KeyPairGenerator.getInstance("DH", cryptoProvider)
       generator.initialize(new DHParameterSpec(P.underlying(), G.underlying(), KeyLength))
       generator
     }
 
     private[this] val keyFactory = {
-      KeyFactory.getInstance("DH", CryptoProvider)
+      KeyFactory.getInstance("DH", cryptoProvider)
     }
 
     def toBytes(key: PublicKey): ByteString = {
@@ -77,6 +75,26 @@ object PeerStreamEncryption {
       Try(keyFactory.generatePublic(keySpec))
     }
   }
+
+  object GenCrypto {
+    def sha1(data: ByteString): ByteString = {
+      val md = MessageDigest.getInstance("SHA-1", cryptoProvider)
+      ByteString(md.digest(data.toArray))
+    }
+
+    def generatePadding(): ByteString = {
+      val length = secureRandom.nextInt(512)
+      val outArray = new Array[Byte](length)
+      secureRandom.nextBytes(outArray)
+      ByteString(outArray)
+    }
+  }
+
+  private object Stage extends Enumeration {
+    val ClientDH, ClientAwaitDH, ClientAwaitConfirmation = Value
+    val ServerAwaitDH, ServerAwaitConfirmation = Value
+    val Ready = Value
+  }
 }
 
 /**
@@ -84,173 +102,210 @@ object PeerStreamEncryption {
   * @param infoHash Torrent 20 bytes info hash
   * @param log Logging adapter
   * @see [[https://wiki.vuze.com/w/Message_Stream_Encryption]]
+  * @todo Server mode
   */
 private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter)
   extends GraphStage[BidiShape[ByteString, ByteString, ByteString, ByteString]] {
 
-  // TODO: Server mode
-  import PeerStreamEncryption.{sha1, DHKeys}
+  import PeerStreamEncryption._
 
-  val tcpInput: Inlet[ByteString] = Inlet("TcpInput")
-  val messageInput: Inlet[ByteString] = Inlet("MessageInput")
-  val messageOutput: Outlet[ByteString] = Outlet("MessageOutput")
-  val tcpOutput: Outlet[ByteString] = Outlet("TcpOutput")
+  val tcpInput = Inlet[ByteString]("TcpInput")
+  val messageInput = Inlet[ByteString]("MessageInput")
+  val messageOutput = Outlet[ByteString]("MessageOutput")
+  val tcpOutput = Outlet[ByteString]("TcpOutput")
 
   override def shape: BidiShape[ByteString, ByteString, ByteString, ByteString] = {
     BidiShape(tcpInput, messageOutput, messageInput, tcpOutput)
   }
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
-    object Stage extends Enumeration {
-      val ClientDH, ClientAwaitDH, ClientAwaitConfirmation = Value
-      val ServerAwaitDH, ServerAwaitConfirmation = Value
-      val Ready = Value
-    }
-
+    // -----------------------------------------------------------------------
+    // State
+    // -----------------------------------------------------------------------
     var stage = Stage.ClientDH
+    var secret = ByteString.empty // Diffie-Hellman shared secret
     var rc4Enabled = false
 
+    // -----------------------------------------------------------------------
+    // Buffers
+    // -----------------------------------------------------------------------
     var messageInputBuffer = List.empty[ByteString]
     var tcpInputBuffer = ByteString.empty // Input buffer
 
-    val ownKey = DHKeys.generateKey()
-    val dhEngine = KeyAgreement.getInstance("DH", PeerStreamEncryption.CryptoProvider)
-    dhEngine.init(ownKey.getPrivate)
-
-    val ownRc4Engine = new RC4Engine
-    val peerRc4Engine = new RC4Engine
-    val secureRandom = new SecureRandom()
-
-    var secret = ByteString.empty // Diffie-Hellman shared secret
-    val VerificationConstant = ByteString(0, 0, 0, 0, 0, 0, 0, 0) // Verification constant, 8 bytes
-
-    def randomPadding: ByteString = {
-      secureRandom.nextBytes(rc4InBuffer)
-      ByteString(rc4InBuffer).take(secureRandom.nextInt(512))
-    }
-
-    val rc4InBuffer = new Array[Byte](1024)
-    val rc4OutBuffer = new Array[Byte](1024)
-
-    def rc4(engine: RC4Engine, data: ByteString): ByteString = {
-      val input = data.toByteBuffer
-      while (input.remaining() > 0) {
-        val length = Array(input.remaining(), 1024).min
-        input.get(rc4InBuffer, 0, length)
-        engine.processBytes(rc4InBuffer, 0, length, rc4OutBuffer, 0)
-        input.position(input.position() - length)
-        input.put(rc4OutBuffer, 0, length)
+    // -----------------------------------------------------------------------
+    // Handshake stages
+    // -----------------------------------------------------------------------
+    private[this] object Stages {
+      def sendPublicKey(): Unit = {
+        val bytes = DH.getKeyBytes()
+        emit(tcpOutput, bytes ++ GenCrypto.generatePadding(), () ⇒ tryPull(tcpInput))
+        stage = Stage.ClientAwaitDH
       }
-      input.flip()
-      ByteString(input)
-    }
 
-    def rc4Encrypt(data: ByteString): ByteString = {
-      rc4(ownRc4Engine, data)
-    }
-
-    def rc4Decrypt(data: ByteString): ByteString = {
-      rc4(peerRc4Engine, data)
-    }
-
-    def resetRc4(engine: RC4Engine): Unit = {
-      engine.reset()
-      engine.processBytes(rc4InBuffer, 0, 1024, rc4OutBuffer, 0)
-    }
-
-    def sendPublicKey(): Unit = {
-      val bytes = DHKeys.toBytes(ownKey.getPublic)
-      emit(tcpOutput, bytes ++ randomPadding, () ⇒ tryPull(tcpInput))
-      stage = Stage.ClientAwaitDH
-    }
-
-    def clientStage2(): Unit = {
-      if (tcpInputBuffer.length >= DHKeys.PublicKeyLength && messageInputBuffer.nonEmpty) {
-        val (take, keep) = tcpInputBuffer.splitAt(DHKeys.PublicKeyLength)
-        tcpInputBuffer = keep
-        DHKeys.tryReadKey(take) match {
-          case Success(bKey) ⇒
-            val handshake: ByteString = {
-              if (messageInputBuffer.nonEmpty) {
-                val handshake = messageInputBuffer.head
-                messageInputBuffer = messageInputBuffer.tail
-                handshake
-              } else {
-                ByteString.empty
+      def clientRequestDH(): Unit = {
+        if (tcpInputBuffer.length >= DHKeys.PublicKeyLength && messageInputBuffer.nonEmpty) {
+          val (take, keep) = tcpInputBuffer.splitAt(DHKeys.PublicKeyLength)
+          tcpInputBuffer = keep
+          DHKeys.tryReadKey(take) match {
+            case Success(bKey) ⇒
+              val handshake: ByteString = {
+                if (messageInputBuffer.nonEmpty) {
+                  val handshake = messageInputBuffer.head
+                  messageInputBuffer = messageInputBuffer.tail
+                  handshake
+                } else {
+                  ByteString.empty
+                }
               }
-            }
-            dhEngine.doPhase(bKey, true)
-            secret = ByteString(dhEngine.generateSecret())
-            ownRc4Engine.init(true, new KeyParameter(sha1(ByteString("keyA") ++ secret ++ infoHash).toArray))
-            peerRc4Engine.init(false, new KeyParameter(sha1(ByteString("keyB") ++ secret ++ infoHash).toArray))
-            resetRc4(ownRc4Engine)
-            resetRc4(peerRc4Engine)
-            val hash1 = sha1(ByteString("req1") ++ secret)
-            val hash2 = {
-              val array = sha1(ByteString("req2") ++ infoHash).toArray
-              val xor = sha1(ByteString("req3") ++ secret).toArray
-              for (i <- array.indices) array(i) = (array(i) ^ xor(i)).toByte
-              ByteString(array)
-            }
-            val encrypted = {
-              val cryptoProvide = 1 | 2
-              val pad = randomPadding
-              val buffer = ByteBuffer.allocate(VerificationConstant.length + 4 + 2 + pad.length + 2 + handshake.length)
-              buffer.put(VerificationConstant.toByteBuffer)
-              buffer.putInt(cryptoProvide)
-              buffer.putShort(pad.length.toShort)
-              buffer.put(pad.toByteBuffer)
-              buffer.putShort(handshake.length.toShort)
-              buffer.put(handshake.toByteBuffer)
-              buffer.flip()
-              rc4Encrypt(ByteString(buffer))
-            }
-            emit(tcpOutput, hash1 ++ hash2 ++ encrypted)
-            stage = Stage.ClientAwaitConfirmation
 
-          case Failure(error) ⇒
-            failStage(new IOException("Invalid DH key", error))
-        }
-      }
-    }
+              secret = DH.createSecret(bKey)
+              RC4.setOwnKey(GenCrypto.sha1(ByteString("keyA") ++ secret ++ infoHash))
+              RC4.setPeerKey(GenCrypto.sha1(ByteString("keyB") ++ secret ++ infoHash))
+              RC4.reset()
 
-    def clientStage3(): Unit = {
-      @tailrec
-      def syncVcPos(): Boolean = {
-        if (tcpInputBuffer.length < VerificationConstant.length) {
-          false
-        } else {
-          val (take, keep) = tcpInputBuffer.splitAt(VerificationConstant.length)
-          if (rc4Decrypt(take) == VerificationConstant) {
-            tcpInputBuffer = keep
-            true
-          } else {
-            tcpInputBuffer = tcpInputBuffer.tail
-            resetRc4(peerRc4Engine)
-            syncVcPos()
+              val hash1 = GenCrypto.sha1(ByteString("req1") ++ secret)
+              val hash2 = {
+                val array = GenCrypto.sha1(ByteString("req2") ++ infoHash).toArray
+                val xor = GenCrypto.sha1(ByteString("req3") ++ secret).toArray
+                for (i <- array.indices) array(i) = (array(i) ^ xor(i)).toByte
+                ByteString(array)
+              }
+
+              val encryptedHandshake = {
+                val cryptoProvide = 1 | 2
+                val pad = GenCrypto.generatePadding()
+                val buffer = ByteBuffer.allocate(VerificationConstant.length + 4 + 2 + pad.length + 2 + handshake.length)
+                buffer.put(VerificationConstant.toByteBuffer)
+                buffer.putInt(cryptoProvide)
+                buffer.putShort(pad.length.toShort)
+                buffer.put(pad.toByteBuffer)
+                buffer.putShort(handshake.length.toShort)
+                buffer.put(handshake.toByteBuffer)
+                buffer.flip()
+                RC4.rc4Encrypt(ByteString(buffer))
+              }
+              emit(tcpOutput, hash1 ++ hash2 ++ encryptedHandshake)
+              stage = Stage.ClientAwaitConfirmation
+
+            case Failure(error) ⇒
+              failStage(new IOException("Invalid DH key", error))
           }
         }
       }
 
-      if (syncVcPos()) {
-        val cryptoSelect = BitTorrentTcpProtocol.int32FromBytes(rc4Decrypt(tcpInputBuffer.take(4)))
-        val padLength = BitTorrentTcpProtocol.int32FromBytes(rc4Decrypt(tcpInputBuffer.drop(4).take(2)))
-        rc4Decrypt(tcpInputBuffer.drop(4 + 2).take(padLength))
-        tcpInputBuffer = tcpInputBuffer.drop(4 + 2 + padLength)
-        if ((cryptoSelect & 2) != 0) {
-          rc4Enabled = true
-        } else if ((cryptoSelect & 1) != 0) {
-          rc4Enabled = false
-        } else {
-          failStage(new IOException("No known encryption methods available"))
+      def clientSynchronize(): Unit = {
+        @tailrec
+        def syncVcPos(): Boolean = {
+          if (tcpInputBuffer.length < VerificationConstant.length) {
+            false
+          } else {
+            val (take, keep) = tcpInputBuffer.splitAt(VerificationConstant.length)
+            if (RC4.rc4Decrypt(take) == VerificationConstant) {
+              tcpInputBuffer = keep
+              true
+            } else {
+              tcpInputBuffer = tcpInputBuffer.tail
+              RC4.resetPeer()
+              syncVcPos()
+            }
+          }
         }
-        log.debug("Peer message stream encryption mode set to {}", if (rc4Enabled) "RC4" else "plaintext")
-        stage = Stage.Ready
-        emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer)
-        tcpInputBuffer = ByteString.empty
+
+        if (syncVcPos()) {
+          val cryptoSelect = BitTorrentTcpProtocol.int32FromBytes(RC4.rc4Decrypt(tcpInputBuffer.take(4)))
+          val padLength = BitTorrentTcpProtocol.int32FromBytes(RC4.rc4Decrypt(tcpInputBuffer.drop(4).take(2)))
+          RC4.rc4Decrypt(tcpInputBuffer.drop(4 + 2).take(padLength))
+          tcpInputBuffer = tcpInputBuffer.drop(4 + 2 + padLength)
+          if ((cryptoSelect & 2) != 0) {
+            rc4Enabled = true
+          } else if ((cryptoSelect & 1) != 0) {
+            rc4Enabled = false
+          } else {
+            failStage(new IOException("No known encryption methods available"))
+          }
+          log.debug("Peer message stream encryption mode set to {}", if (rc4Enabled) "RC4" else "plaintext")
+          stage = Stage.Ready
+          emit(messageOutput, if (rc4Enabled) RC4.rc4Decrypt(tcpInputBuffer) else tcpInputBuffer)
+          tcpInputBuffer = ByteString.empty
+        }
       }
     }
 
+    // -----------------------------------------------------------------------
+    // Cryptography
+    // -----------------------------------------------------------------------
+    private[this] object DH {
+      val ownKey = DHKeys.generateKey()
+      val dhEngine = KeyAgreement.getInstance("DH", cryptoProvider)
+      dhEngine.init(ownKey.getPrivate)
+
+      def getKeyBytes(): ByteString = {
+        DHKeys.toBytes(ownKey.getPublic)
+      }
+
+      def createSecret(key: PublicKey): ByteString = {
+        dhEngine.doPhase(key, true)
+        ByteString(dhEngine.generateSecret())
+      }
+    }
+
+    private[this] object RC4 {
+      private[this] val ownRc4Engine = new RC4Engine
+      private[this] val peerRc4Engine = new RC4Engine
+      private[this] val rc4InBuffer = new Array[Byte](RC4SkipBytes)
+      private[this] val rc4OutBuffer = new Array[Byte](RC4SkipBytes)
+
+      private[this] def rc4(engine: RC4Engine, data: ByteString): ByteString = {
+        val input = data.toByteBuffer
+        while (input.remaining() > 0) {
+          val length = Array(input.remaining(), RC4SkipBytes).min
+          input.get(rc4InBuffer, 0, length)
+          engine.processBytes(rc4InBuffer, 0, length, rc4OutBuffer, 0)
+          input.position(input.position() - length)
+          input.put(rc4OutBuffer, 0, length)
+        }
+        input.flip()
+        ByteString(input)
+      }
+
+      def rc4Encrypt(data: ByteString): ByteString = {
+        rc4(ownRc4Engine, data)
+      }
+
+      def rc4Decrypt(data: ByteString): ByteString = {
+        rc4(peerRc4Engine, data)
+      }
+
+      def resetRc4(engine: RC4Engine): Unit = {
+        engine.reset()
+        engine.processBytes(rc4InBuffer, 0, RC4SkipBytes, rc4OutBuffer, 0)
+      }
+
+      def setOwnKey(bytes: ByteString): Unit = {
+        ownRc4Engine.init(true, new KeyParameter(bytes.toArray))
+      }
+
+      def setPeerKey(bytes: ByteString): Unit = {
+        peerRc4Engine.init(true, new KeyParameter(bytes.toArray))
+      }
+
+      def resetOwn(): Unit = {
+        resetRc4(ownRc4Engine)
+      }
+
+      def resetPeer(): Unit = {
+        resetRc4(peerRc4Engine)
+      }
+
+      def reset(): Unit = {
+        resetOwn()
+        resetPeer()
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Handlers
+    // -----------------------------------------------------------------------
     setHandler(tcpInput, new InHandler {
       override def onPush(): Unit = {
         val bytes = grab(tcpInput)
@@ -263,15 +318,15 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
             // Nothing
 
           case Stage.ClientAwaitDH ⇒
-            clientStage2()
+            Stages.clientRequestDH()
             tryPull(tcpInput)
 
           case Stage.ClientAwaitConfirmation ⇒
-            clientStage3()
+            Stages.clientSynchronize()
             tryPull(tcpInput)
 
           case Stage.Ready ⇒
-            emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
+            emit(messageOutput, if (rc4Enabled) RC4.rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
             tcpInputBuffer = ByteString.empty
         }
       }
@@ -280,7 +335,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
     setHandler(tcpOutput, new OutHandler {
       override def onPull(): Unit = {
         if (stage == Stage.ClientDH) {
-          sendPublicKey()
+          Stages.sendPublicKey()
         } else if (!hasBeenPulled(messageInput)) {
           pull(messageInput)
         }
@@ -292,7 +347,10 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
         if (stage != Stage.Ready || !isAvailable(tcpOutput)) {
           messageInputBuffer :+= grab(messageInput)
         } else {
-          emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput)).map(msg ⇒ if (rc4Enabled) rc4Encrypt(msg) else msg), () ⇒ if (!hasBeenPulled(messageInput)) tryPull(messageInput))
+          emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput))
+            .map(msg ⇒ if (rc4Enabled) RC4.rc4Encrypt(msg) else msg),
+            () ⇒ if (!hasBeenPulled(messageInput)) tryPull(messageInput))
+
           messageInputBuffer = List.empty
         }
       }
