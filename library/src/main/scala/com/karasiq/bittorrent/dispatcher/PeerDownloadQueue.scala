@@ -1,6 +1,7 @@
 package com.karasiq.bittorrent.dispatcher
 
 import akka.actor.{ActorContext, ActorRef}
+
 import com.karasiq.bittorrent.dispatcher.MessageConversions._
 import com.karasiq.bittorrent.protocol.PeerMessages._
 
@@ -33,18 +34,18 @@ private[dispatcher] final class PeerDownloadQueue(blockSize: Int, maxQueueSize: 
     }
 
     def update(bytes: Long): PeerDownloadRate = {
-      PeerDownloadRate(1000 + updatedAgo, rate + bytes)
+      copy(1000 + updatedAgo, rate + bytes)
     }
   }
 
   private object PeerDownloadRate {
-    val empty = PeerDownloadRate(0, 0)
+    val empty = new PeerDownloadRate(0, 0)
   }
 
   private final case class PeerDemand(queue: Seq[QueuedRequest], rate: PeerDownloadRate)
 
   private object PeerDemand {
-    val empty = PeerDemand(Vector.empty, PeerDownloadRate.empty)
+    val empty = new PeerDemand(Vector.empty, PeerDownloadRate.empty)
   }
 
   private var demand: Map[ActorRef, PeerDemand] = Map.empty.withDefaultValue(PeerDemand.empty)

@@ -1,42 +1,58 @@
 package com.karasiq.torrentstream.app
 
+import scala.language.implicitConversions
+
 import akka.actor.{ActorRef, ActorSystem}
-import akka.http.scaladsl.model.headers.{ContentDispositionTypes, Range, `Content-Disposition`}
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, StatusCodes}
-import akka.http.scaladsl.server.Directives._
+import akka.http.scaladsl.model.headers.{`Content-Disposition`, ContentDispositionTypes, Range}
 import akka.http.scaladsl.server._
+import akka.http.scaladsl.server.Directives._
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 import akka.util.ByteString
 import boopickle.Default._
+import org.apache.commons.io.FilenameUtils
+
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.torrentstream.TorrentStream
 import com.karasiq.torrentstream.app.AppSerializers.StringInfoHashOps
-import org.apache.commons.io.FilenameUtils
 
-import scala.language.implicitConversions
+private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
+                             (implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer)
+  extends AppSerializers.Marshallers {
 
-private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) extends AppSerializers.Marshallers {
-  private val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
-  private val bufferSize = config.getInt("buffer-size") // In bytes
+  private[this] val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
+  private[this] val bufferSize = config.getInt("buffer-size") // In bytes
 
   // Extracts `Range` header value
-  private def rangesHeaderValue(torrent: Torrent): Directive1[Vector[(Long, Long)]] = {
-    implicit def optionalLongToOption(opt: java.util.OptionalLong): Option[Long] = {
-      if (opt.isPresent) Some(opt.getAsLong) else None
+  private[this] def rangesHeaderValue(torrent: Torrent): Directive1[Vector[(Long, Long)]] = {
+    def normalizeRange(range: (Long, Long)): (Long, Long) = {
+      val end = math.min(torrent.size, range._2)
+      val start = math.min(end, math.max(0L, range._1))
+      (start, end)
     }
 
     optionalHeaderValueByType[Range]().map {
-      case Some(ranges) ⇒
-        ranges.ranges.map(r ⇒ {
-          val offset: Option[Long] = r.getOffset()
-          r.getSliceFirst().orElse(offset).getOrElse(0L) → r.getSliceLast().getOrElse(torrent.size)
-        }).toVector
+      case Some(httpRanges) ⇒
+        import akka.http.scaladsl.model.headers.ByteRange
+        val resultRanges = httpRanges.ranges.map {
+          case ByteRange.Suffix(length) ⇒
+            (torrent.size - length, torrent.size)
+
+          case ByteRange.Slice(first, last) ⇒
+            (first, last + 1)
+
+          case ByteRange.FromOffset(offset) ⇒
+            (offset, torrent.size)
+        }
+
+        resultRanges.map(normalizeRange).toVector
+
       case None ⇒
         Vector.empty[(Long, Long)]
     }
   }
 
-  private def createTorrentStream(torrent: Torrent, fileName: String, ranges: Seq[(Long, Long)]): Directive1[TorrentStream] = {
+  private[this] def createTorrentStream(torrent: Torrent, fileName: String, ranges: Seq[(Long, Long)]): Directive1[TorrentStream] = {
     provide(TorrentStream.create(torrentManager, torrent, fileName, ranges))
   }
 

@@ -2,7 +2,7 @@ lazy val commonSettings = Seq(
   organization := "com.github.karasiq",
   isSnapshot := false,
   version := "1.0.3",
-  scalaVersion := "2.11.11"
+  scalaVersion := "2.11.8"
 )
 
 lazy val publishSettings = Seq(
@@ -33,7 +33,7 @@ lazy val publishSettings = Seq(
 
 lazy val librarySettings = Seq(
   name := "bittorrent",
-  crossScalaVersions := Seq("2.11.11", "2.12.3"),
+  crossScalaVersions := Seq("2.11.8", "2.12.1"),
   libraryDependencies ++= {
     val akkaV = "2.5.4"
     val akkaHttpV = "10.0.10"
