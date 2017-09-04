@@ -167,7 +167,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
               val hash2 = {
                 val array = GenCrypto.sha1(ByteString("req2") ++ infoHash).toArray
                 val xor = GenCrypto.sha1(ByteString("req3") ++ secret).toArray
-                for (i <- array.indices) array(i) = (array(i) ^ xor(i)).toByte
+                for (i ← array.indices) array(i) = (array(i) ^ xor(i)).toByte
                 ByteString(array)
               }
 
@@ -182,8 +182,9 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
                 buffer.putShort(handshake.length.toShort)
                 buffer.put(handshake.toByteBuffer)
                 buffer.flip()
-                RC4.rc4Encrypt(ByteString(buffer))
+                RC4.encrypt(ByteString(buffer))
               }
+
               emit(tcpOutput, hash1 ++ hash2 ++ encryptedHandshake)
               stage = Stage.ClientAwaitConfirmation
 
@@ -200,7 +201,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
             false
           } else {
             val (take, keep) = tcpInputBuffer.splitAt(VerificationConstant.length)
-            if (RC4.rc4Decrypt(take) == VerificationConstant) {
+            if (RC4.decrypt(take) == VerificationConstant) {
               tcpInputBuffer = keep
               true
             } else {
@@ -212,9 +213,9 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
         }
 
         if (syncVcPos()) {
-          val cryptoSelect = BitTorrentTcpProtocol.int32FromBytes(RC4.rc4Decrypt(tcpInputBuffer.take(4)))
-          val padLength = BitTorrentTcpProtocol.int32FromBytes(RC4.rc4Decrypt(tcpInputBuffer.drop(4).take(2)))
-          RC4.rc4Decrypt(tcpInputBuffer.drop(4 + 2).take(padLength))
+          val cryptoSelect = BitTorrentTcpProtocol.int32FromBytes(RC4.decrypt(tcpInputBuffer.take(4)))
+          val padLength = BitTorrentTcpProtocol.int32FromBytes(RC4.decrypt(tcpInputBuffer.drop(4).take(2)))
+          RC4.decrypt(tcpInputBuffer.drop(4 + 2).take(padLength))
           tcpInputBuffer = tcpInputBuffer.drop(4 + 2 + padLength)
           if ((cryptoSelect & 2) != 0) {
             rc4Enabled = true
@@ -225,7 +226,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
           }
           log.debug("Peer message stream encryption mode set to {}", if (rc4Enabled) "RC4" else "plaintext")
           stage = Stage.Ready
-          emit(messageOutput, if (rc4Enabled) RC4.rc4Decrypt(tcpInputBuffer) else tcpInputBuffer)
+          emit(messageOutput, if (rc4Enabled) RC4.decrypt(tcpInputBuffer) else tcpInputBuffer)
           tcpInputBuffer = ByteString.empty
         }
       }
@@ -255,7 +256,36 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
       private[this] val rc4InBuffer = new Array[Byte](RC4SkipBytes)
       private[this] val rc4OutBuffer = new Array[Byte](RC4SkipBytes)
 
-      private[this] def rc4(engine: RC4Engine, data: ByteString): ByteString = {
+      def encrypt(data: ByteString): ByteString = {
+        processBytes(ownRc4Engine, data)
+      }
+
+      def decrypt(data: ByteString): ByteString = {
+        processBytes(peerRc4Engine, data)
+      }
+
+      def setOwnKey(bytes: ByteString): Unit = {
+        ownRc4Engine.init(true, new KeyParameter(bytes.toArray))
+      }
+
+      def setPeerKey(bytes: ByteString): Unit = {
+        peerRc4Engine.init(true, new KeyParameter(bytes.toArray))
+      }
+
+      def resetOwn(): Unit = {
+        resetEngine(ownRc4Engine)
+      }
+
+      def resetPeer(): Unit = {
+        resetEngine(peerRc4Engine)
+      }
+
+      def reset(): Unit = {
+        resetOwn()
+        resetPeer()
+      }
+
+      private[this] def processBytes(engine: RC4Engine, data: ByteString): ByteString = {
         val input = data.toByteBuffer
         while (input.remaining() > 0) {
           val length = Array(input.remaining(), RC4SkipBytes).min
@@ -268,38 +298,9 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
         ByteString(input)
       }
 
-      def rc4Encrypt(data: ByteString): ByteString = {
-        rc4(ownRc4Engine, data)
-      }
-
-      def rc4Decrypt(data: ByteString): ByteString = {
-        rc4(peerRc4Engine, data)
-      }
-
-      def resetRc4(engine: RC4Engine): Unit = {
+      private[this] def resetEngine(engine: RC4Engine): Unit = {
         engine.reset()
         engine.processBytes(rc4InBuffer, 0, RC4SkipBytes, rc4OutBuffer, 0)
-      }
-
-      def setOwnKey(bytes: ByteString): Unit = {
-        ownRc4Engine.init(true, new KeyParameter(bytes.toArray))
-      }
-
-      def setPeerKey(bytes: ByteString): Unit = {
-        peerRc4Engine.init(true, new KeyParameter(bytes.toArray))
-      }
-
-      def resetOwn(): Unit = {
-        resetRc4(ownRc4Engine)
-      }
-
-      def resetPeer(): Unit = {
-        resetRc4(peerRc4Engine)
-      }
-
-      def reset(): Unit = {
-        resetOwn()
-        resetPeer()
       }
     }
 
@@ -326,7 +327,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
             tryPull(tcpInput)
 
           case Stage.Ready ⇒
-            emit(messageOutput, if (rc4Enabled) RC4.rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
+            emit(messageOutput, if (rc4Enabled) RC4.decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
             tcpInputBuffer = ByteString.empty
         }
       }
@@ -348,7 +349,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
           messageInputBuffer :+= grab(messageInput)
         } else {
           emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput))
-            .map(msg ⇒ if (rc4Enabled) RC4.rc4Encrypt(msg) else msg),
+            .map(msg ⇒ if (rc4Enabled) RC4.encrypt(msg) else msg),
             () ⇒ if (!hasBeenPulled(messageInput)) tryPull(messageInput))
 
           messageInputBuffer = List.empty
