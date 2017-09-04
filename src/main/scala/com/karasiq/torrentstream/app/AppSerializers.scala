@@ -1,6 +1,5 @@
 package com.karasiq.torrentstream.app
 
-import java.nio.ByteBuffer
 import java.time.Instant
 
 import akka.http.scaladsl.marshalling._
@@ -24,11 +23,11 @@ private[app] object AppSerializers {
   trait Picklers {
     implicit val byteStringPickler: Pickler[ByteString] = new Pickler[ByteString] {
       override def pickle(obj: ByteString)(implicit state: PickleState): Unit = {
-        state.pickle(obj.toByteBuffer)
+        state.pickle(obj.toArray)
       }
 
       override def unpickle(implicit state: UnpickleState): ByteString = {
-        ByteString(state.unpickle[ByteBuffer])
+        ByteString(state.unpickle[Array[Byte]])
       }
     }
 
@@ -39,7 +38,9 @@ private[app] object AppSerializers {
       }
 
       override def unpickle(implicit state: UnpickleState): Instant = {
-        Instant.ofEpochSecond(state.unpickle[Long], state.unpickle[Int])
+        val second = state.unpickle[Long]
+        val nano = state.unpickle[Int]
+        Instant.ofEpochSecond(second, nano)
       }
     }
   }
