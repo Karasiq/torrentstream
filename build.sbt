@@ -39,13 +39,13 @@ lazy val librarySettings = Seq(
     val akkaHttpV = "10.0.10"
     Seq(
       "com.typesafe.akka" %% "akka-actor" % akkaV,
-      "org.scalatest" %% "scalatest" % "2.2.4" % "test",
       "com.typesafe.akka" %% "akka-stream" % akkaV,
       "com.typesafe.akka" %% "akka-http" % akkaHttpV,
-      "commons-codec" % "commons-codec" % "1.8",
-      "commons-io" % "commons-io" % "2.4",
-      "org.parboiled" %% "parboiled" % "2.1.1",
-      "org.bouncycastle" % "bcprov-jdk15on" % "1.52"
+      "commons-codec" % "commons-codec" % "1.10",
+      "commons-io" % "commons-io" % "2.5",
+      "org.parboiled" %% "parboiled" % "2.1.4",
+      "org.bouncycastle" % "bcprov-jdk15on" % "1.58",
+    "org.scalatest" %% "scalatest" % "2.2.4" % "test",
     )
   }
 )
@@ -54,14 +54,15 @@ lazy val backendSettings = Seq(
   name := "torrentstream",
   libraryDependencies ++= Seq(
     "com.github.karasiq" %% "mapdbutils" % "1.1.1",
-    "org.mapdb" % "mapdb" % "2.0-beta12",
-    "me.chrons" %% "boopickle" % "1.1.2"
+    "org.mapdb" % "mapdb" % "2.0-beta13",
+    "me.chrons" %% "boopickle" % "1.2.5"
   ),
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main"),
   scalaJsBundlerCompile in Compile <<= (scalaJsBundlerCompile in Compile).dependsOn(fullOptJS in Compile in frontend),
   scalaJsBundlerAssets in Compile += {
     import com.karasiq.scalajsbundler.ScalaJSBundler.PageContent
     import com.karasiq.scalajsbundler.dsl._
+
     def fontPackage(name: String, baseUrl: String): Seq[PageContent] = {
       Seq("eot", "svg", "ttf", "woff", "woff2").map { ext ⇒
         Static(s"fonts/$name.$ext") from url(s"$baseUrl.$ext")
@@ -80,20 +81,16 @@ lazy val backendSettings = Seq(
       Style from url("https://raw.githubusercontent.com/FortAwesome/Font-Awesome/v4.5.0/css/font-awesome.css")
     )
 
-    val appFiles = Seq(
+    val appStatic = Seq(
       // Static
       Html from TorrentStreamAssets.index,
-      Style from TorrentStreamAssets.style,
-
-      // Scala.js app
-      Script from file("frontend") / "target" / "scala-2.11" / "torrentstream-frontend-opt.js",
-      Script from file("frontend") / "target" / "scala-2.11" / "torrentstream-frontend-launcher.js"
+      Style from TorrentStreamAssets.style
     )
 
     val fonts = fontPackage("glyphicons-halflings-regular", "https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular") ++
       fontPackage("fontawesome-webfont", "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/v4.5.0/fonts/fontawesome-webfont")
 
-    Bundle("index", jsDeps ++ appFiles ++ fonts:_*)
+    Bundle("index", jsDeps, appStatic, fonts, scalaJsApplication(frontend).value)
   }
 )
 
