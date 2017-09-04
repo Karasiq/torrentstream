@@ -124,7 +124,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
     // -----------------------------------------------------------------------
     var stage = Stage.ClientDH
     var secret = ByteString.empty // Diffie-Hellman shared secret
-    var rc4Enabled = false
+    var isRC4Enabled = false
 
     // -----------------------------------------------------------------------
     // Buffers
@@ -218,15 +218,15 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
           RC4.decrypt(tcpInputBuffer.drop(4 + 2).take(padLength))
           tcpInputBuffer = tcpInputBuffer.drop(4 + 2 + padLength)
           if ((cryptoSelect & 2) != 0) {
-            rc4Enabled = true
+            isRC4Enabled = true
           } else if ((cryptoSelect & 1) != 0) {
-            rc4Enabled = false
+            isRC4Enabled = false
           } else {
             failStage(new IOException("No known encryption methods available"))
           }
-          log.debug("Peer message stream encryption mode set to {}", if (rc4Enabled) "RC4" else "plaintext")
+          log.debug("Peer message stream encryption mode set to {}", if (isRC4Enabled) "RC4" else "plaintext")
           stage = Stage.Ready
-          emit(messageOutput, if (rc4Enabled) RC4.decrypt(tcpInputBuffer) else tcpInputBuffer)
+          emit(messageOutput, if (isRC4Enabled) RC4.decrypt(tcpInputBuffer) else tcpInputBuffer)
           tcpInputBuffer = ByteString.empty
         }
       }
@@ -236,8 +236,8 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
     // Cryptography
     // -----------------------------------------------------------------------
     private[this] object DH {
-      val ownKey = DHKeys.generateKey()
-      val dhEngine = KeyAgreement.getInstance("DH", cryptoProvider)
+      private[this] val ownKey = DHKeys.generateKey()
+      private[this] val dhEngine = KeyAgreement.getInstance("DH", cryptoProvider)
       dhEngine.init(ownKey.getPrivate)
 
       def getKeyBytes(): ByteString = {
@@ -327,7 +327,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
             tryPull(tcpInput)
 
           case Stage.Ready ⇒
-            emit(messageOutput, if (rc4Enabled) RC4.decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
+            emit(messageOutput, if (isRC4Enabled) RC4.decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
             tcpInputBuffer = ByteString.empty
         }
       }
@@ -349,7 +349,7 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
           messageInputBuffer :+= grab(messageInput)
         } else {
           emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput))
-            .map(msg ⇒ if (rc4Enabled) RC4.encrypt(msg) else msg),
+            .map(msg ⇒ if (isRC4Enabled) RC4.encrypt(msg) else msg),
             () ⇒ if (!hasBeenPulled(messageInput)) tryPull(messageInput))
 
           messageInputBuffer = List.empty
@@ -365,6 +365,9 @@ private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: Log
       }
     })
 
+    // -----------------------------------------------------------------------
+    // Lifecycle
+    // -----------------------------------------------------------------------
     override protected def onTimer(timerKey: Any): Unit = {
       if (timerKey == "HandshakeTimeout" && stage != Stage.Ready) {
         failStage(new TimeoutException("Handshake timeout"))
