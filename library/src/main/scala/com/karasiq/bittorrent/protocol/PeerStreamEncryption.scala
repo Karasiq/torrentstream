@@ -10,20 +10,33 @@ import java.util.concurrent.TimeoutException
 import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 
+import akka.NotUsed
 import akka.event.LoggingAdapter
 import akka.stream._
+import akka.stream.scaladsl.BidiFlow
 import akka.stream.stage._
 import akka.util.ByteString
 import org.bouncycastle.crypto.engines.RC4Engine
 import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.jcajce.provider.asymmetric.dh.BCDHPublicKey
 
-private[protocol] object PeerStreamEncryption {
+object PeerStreamEncryption {
   private val CryptoProvider = new org.bouncycastle.jce.provider.BouncyCastleProvider()
 
-  private object DHKeys {
+  def apply(infoHash: ByteString)(implicit log: LoggingAdapter): BidiFlow[ByteString, ByteString, ByteString, ByteString, NotUsed] = {
+    BidiFlow.fromGraph(new PeerStreamEncryption(infoHash)).named("peerStreamEncryption")
+  }
+
+  private def sha1(data: ByteString): ByteString = {
+    val md = MessageDigest.getInstance("SHA-1", CryptoProvider)
+    ByteString(md.digest(data.toArray))
+  }
+
+  object DHKeys {
+    val PublicKeyLength = 96
+
     private[this] val P = BigInt("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A63A36210000000000090563", 16)
     private[this] val G = BigInt(2)
 
@@ -33,33 +46,31 @@ private[protocol] object PeerStreamEncryption {
       generator
     }
 
+    def toBytes(key: PublicKey): ByteString = {
+      val keyBytes = key.asInstanceOf[BCDHPublicKey].getY.toByteArray
+      if (keyBytes.length == PublicKeyLength + 1)
+        ByteString.fromArray(keyBytes, 1, PublicKeyLength)
+      else if (keyBytes.length == PublicKeyLength)
+        ByteString(keyBytes)
+      else
+        throw new IllegalArgumentException(s"Invalid DH key: $key")
+    }
+
     def generateKey(): KeyPair = {
-      @tailrec
-      def generateKeyRec(retries: Int = 0): KeyPair = {
-        val keyPair = generator.generateKeyPair()
-        val keyBytes = keyPair.getPublic.asInstanceOf[BCDHPublicKey].getY.toByteArray
-        if (keyBytes.length == 96) {
-          keyPair
-        } else {
-          // Retry
-          require(retries < 1000, "Unable to generate valid DH key pair")
-          generateKeyRec(retries + 1)
-        }
+      generator.generateKeyPair()
+    }
+
+    def tryReadKey(bytes: ByteString): Try[PublicKey] = {
+      require(bytes.length == PublicKeyLength, "Invalid DH key length")
+      val keyFactory = KeyFactory.getInstance("DH", CryptoProvider)
+      val keyBigInt = {
+        // val hexKey = Hex.toHexString((bytes.dropRight(1) :+ 0.toByte).toArray)
+        // BigInt(hexKey, 16)
+        BigInt(1, bytes.toArray)
       }
-
-      generateKeyRec()
+      val keySpec = new DHPublicKeySpec(keyBigInt.underlying(), P.underlying(), G.underlying())
+      Try(keyFactory.generatePublic(keySpec))
     }
-
-    def tryReadKey(bytes: ByteString): Option[PublicKey] = {
-      val generator = KeyFactory.getInstance("DH", CryptoProvider)
-      val keySpec = new DHPublicKeySpec(BigInt(bytes.toArray).underlying(), P.underlying(), G.underlying())
-      Try(generator.generatePublic(keySpec)).toOption
-    }
-  }
-
-  def sha1(data: ByteString): ByteString = {
-    val md = MessageDigest.getInstance("SHA-1", CryptoProvider)
-    ByteString(md.digest(data.toArray))
   }
 }
 
@@ -69,7 +80,9 @@ private[protocol] object PeerStreamEncryption {
   * @param log Logging adapter
   * @see [[https://wiki.vuze.com/w/Message_Stream_Encryption]]
   */
-class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) extends GraphStage[BidiShape[ByteString, ByteString, ByteString, ByteString]] {
+private final class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter)
+  extends GraphStage[BidiShape[ByteString, ByteString, ByteString, ByteString]] {
+
   // TODO: Server mode
   import PeerStreamEncryption.{sha1, DHKeys}
 
@@ -92,19 +105,19 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
     var stage = Stage.ClientDH
     var rc4Enabled = false
 
-    var messageInputBuffer = Vector.empty[ByteString]
+    var messageInputBuffer = List.empty[ByteString]
     var tcpInputBuffer = ByteString.empty // Input buffer
 
-    val key = DHKeys.generateKey()
-    val dh = KeyAgreement.getInstance("DH", PeerStreamEncryption.CryptoProvider)
-    dh.init(key.getPrivate)
+    val ownKey = DHKeys.generateKey()
+    val dhEngine = KeyAgreement.getInstance("DH", PeerStreamEncryption.CryptoProvider)
+    dhEngine.init(ownKey.getPrivate)
 
     val ownRc4Engine = new RC4Engine
     val peerRc4Engine = new RC4Engine
-    val secureRandom = new SecureRandom(key.getPublic.getEncoded)
+    val secureRandom = new SecureRandom()
 
     var secret = ByteString.empty // Diffie-Hellman shared secret
-    val vc = ByteString(0, 0, 0, 0, 0, 0, 0, 0) // Verification constant, 8 bytes
+    val VerificationConstant = ByteString(0, 0, 0, 0, 0, 0, 0, 0) // Verification constant, 8 bytes
 
     def randomPadding: ByteString = {
       secureRandom.nextBytes(rc4InBuffer)
@@ -141,17 +154,17 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
     }
 
     def sendPublicKey(): Unit = {
-      val bytes = ByteString(key.getPublic.asInstanceOf[BCDHPublicKey].getY.toByteArray)
-      emit(tcpOutput, bytes ++ randomPadding)
+      val bytes = DHKeys.toBytes(ownKey.getPublic)
+      emit(tcpOutput, bytes ++ randomPadding, () ⇒ tryPull(tcpInput))
       stage = Stage.ClientAwaitDH
     }
 
     def clientStage2(): Unit = {
-      if (tcpInputBuffer.length >= 96 && messageInputBuffer.nonEmpty) {
-        val (take, keep) = tcpInputBuffer.splitAt(96)
+      if (tcpInputBuffer.length >= DHKeys.PublicKeyLength && messageInputBuffer.nonEmpty) {
+        val (take, keep) = tcpInputBuffer.splitAt(DHKeys.PublicKeyLength)
         tcpInputBuffer = keep
         DHKeys.tryReadKey(take) match {
-          case Some(bKey) ⇒
+          case Success(bKey) ⇒
             val handshake: ByteString = {
               if (messageInputBuffer.nonEmpty) {
                 val handshake = messageInputBuffer.head
@@ -161,8 +174,8 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
                 ByteString.empty
               }
             }
-            dh.doPhase(bKey, true)
-            secret = ByteString(dh.generateSecret())
+            dhEngine.doPhase(bKey, true)
+            secret = ByteString(dhEngine.generateSecret())
             ownRc4Engine.init(true, new KeyParameter(sha1(ByteString("keyA") ++ secret ++ infoHash).toArray))
             peerRc4Engine.init(false, new KeyParameter(sha1(ByteString("keyB") ++ secret ++ infoHash).toArray))
             resetRc4(ownRc4Engine)
@@ -177,8 +190,8 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
             val encrypted = {
               val cryptoProvide = 1 | 2
               val pad = randomPadding
-              val buffer = ByteBuffer.allocate(vc.length + 4 + 2 + pad.length + 2 + handshake.length)
-              buffer.put(vc.toByteBuffer)
+              val buffer = ByteBuffer.allocate(VerificationConstant.length + 4 + 2 + pad.length + 2 + handshake.length)
+              buffer.put(VerificationConstant.toByteBuffer)
               buffer.putInt(cryptoProvide)
               buffer.putShort(pad.length.toShort)
               buffer.put(pad.toByteBuffer)
@@ -190,8 +203,8 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
             emit(tcpOutput, hash1 ++ hash2 ++ encrypted)
             stage = Stage.ClientAwaitConfirmation
 
-          case None ⇒
-            failStage(new IOException("Invalid DH key"))
+          case Failure(error) ⇒
+            failStage(new IOException("Invalid DH key", error))
         }
       }
     }
@@ -199,11 +212,11 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
     def clientStage3(): Unit = {
       @tailrec
       def syncVcPos(): Boolean = {
-        if (tcpInputBuffer.length < vc.length) {
+        if (tcpInputBuffer.length < VerificationConstant.length) {
           false
         } else {
-          val (take, keep) = tcpInputBuffer.splitAt(vc.length)
-          if (rc4Decrypt(take) == vc) {
+          val (take, keep) = tcpInputBuffer.splitAt(VerificationConstant.length)
+          if (rc4Decrypt(take) == VerificationConstant) {
             tcpInputBuffer = keep
             true
           } else {
@@ -246,11 +259,11 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
 
           case Stage.ClientAwaitDH ⇒
             clientStage2()
-            pull(tcpInput)
+            tryPull(tcpInput)
 
           case Stage.ClientAwaitConfirmation ⇒
             clientStage3()
-            pull(tcpInput)
+            tryPull(tcpInput)
 
           case Stage.Ready ⇒
             emit(messageOutput, if (rc4Enabled) rc4Decrypt(tcpInputBuffer) else tcpInputBuffer, () ⇒ if (!hasBeenPulled(tcpInput)) tryPull(tcpInput))
@@ -263,7 +276,6 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
       override def onPull(): Unit = {
         if (stage == Stage.ClientDH) {
           sendPublicKey()
-          pull(tcpInput)
         } else if (!hasBeenPulled(messageInput)) {
           pull(messageInput)
         }
@@ -276,7 +288,7 @@ class PeerStreamEncryption(infoHash: ByteString)(implicit log: LoggingAdapter) e
           messageInputBuffer :+= grab(messageInput)
         } else {
           emitMultiple(tcpOutput, (messageInputBuffer :+ grab(messageInput)).map(msg ⇒ if (rc4Enabled) rc4Encrypt(msg) else msg), () ⇒ if (!hasBeenPulled(messageInput)) tryPull(messageInput))
-          messageInputBuffer = Vector.empty
+          messageInputBuffer = List.empty
         }
       }
     })

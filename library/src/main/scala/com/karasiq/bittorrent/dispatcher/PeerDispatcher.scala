@@ -8,6 +8,7 @@ import scala.language.postfixOps
 import scala.util.{Failure, Random, Success}
 
 import akka.actor._
+import akka.pattern.ask
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings, FlowShape}
 import akka.stream.actor.ActorPublisher
 import akka.stream.scaladsl.{Tcp, _}
@@ -77,24 +78,25 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
 
   override def receive: Receive = {
     case request: TrackerRequest ⇒
-      val self = context.self
-      import akka.pattern.ask
-      import context.system
       implicit val timeout = Timeout(30 seconds)
+      val self = context.self
+      val scheduler = context.system.scheduler
+
       log.info("Announce request: {}", request.announce)
+
       (announcer ? request).onComplete {
         case Success(TrackerError(error)) ⇒
           log.error("Tracker error: {}", error)
-          system.scheduler.scheduleOnce(1 minute, self, request)
+          scheduler.scheduleOnce(30 seconds, self, request)
 
         case Success(TrackerResponse(_, interval, minInterval, trackerId, _, _, peerList)) ⇒
           val next = minInterval.getOrElse(interval).seconds
           log.info("{} peers received from tracker: {}, next request in {}", peerList.length, request.announce, next)
-          system.scheduler.scheduleOnce(next, self, request.copy(trackerId = trackerId))
+          scheduler.scheduleOnce(next, self, request.copy(trackerId = trackerId))
           peerList.foreach(peer ⇒ self ! ConnectPeer(peer.address))
 
         case _ ⇒
-          system.scheduler.scheduleOnce(5 minutes, self, request)
+          scheduler.scheduleOnce(30 seconds, self, request)
       }
 
     case piece @ DownloadedPiece(index, data) ⇒
@@ -191,7 +193,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
           .concat(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))
           // .keepAlive[ByteString](2 minutes, () ⇒ PeerMessages.KeepAlive)
       )
-      val encryption = b.add(new PeerStreamEncryption(ownData.infoHash)(log))
+      val encryption = b.add(PeerStreamEncryption(ownData.infoHash)(log))
       encryption.out1 ~> messages.in
       output.out ~> encryption.in2
       FlowShape(encryption.in1, encryption.out2)
