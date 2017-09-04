@@ -35,20 +35,29 @@ object PeerStreamEncryption {
   }
 
   object DHKeys {
+    // Key constants
+    val KeyLength = 160
     val PublicKeyLength = 96
-
     private[this] val P = BigInt("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A63A36210000000000090563", 16)
     private[this] val G = BigInt(2)
-    private[this] val KeyLength = 160
 
+    // Key generators
     private[this] val generator = {
       val generator = KeyPairGenerator.getInstance("DH", CryptoProvider)
       generator.initialize(new DHParameterSpec(P.underlying(), G.underlying(), KeyLength))
       generator
     }
 
+    private[this] val keyFactory = {
+      KeyFactory.getInstance("DH", CryptoProvider)
+    }
+
     def toBytes(key: PublicKey): ByteString = {
-      val keyBytes = key.asInstanceOf[BCDHPublicKey].getY.toByteArray
+      val keyBytes: Array[Byte] = key match {
+        case dhKey: BCDHPublicKey ⇒ dhKey.getY.toByteArray
+        case _ ⇒ throw new IllegalArgumentException(s"Not a DH public key: $key")
+      }
+
       if (keyBytes.length == PublicKeyLength + 1)
         ByteString.fromArray(keyBytes, 1, PublicKeyLength)
       else if (keyBytes.length == PublicKeyLength)
@@ -63,10 +72,7 @@ object PeerStreamEncryption {
 
     def tryReadKey(bytes: ByteString): Try[PublicKey] = {
       require(bytes.length == PublicKeyLength, "Invalid DH key length")
-      val keyFactory = KeyFactory.getInstance("DH", CryptoProvider)
-      val keyBigInt = {
-        BigInt(1, bytes.toArray)
-      }
+      val keyBigInt = BigInt(1, bytes.toArray)
       val keySpec = new DHPublicKeySpec(keyBigInt.underlying(), P.underlying(), G.underlying())
       Try(keyFactory.generatePublic(keySpec))
     }
