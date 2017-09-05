@@ -1,14 +1,15 @@
 package com.karasiq.bittorrent.announce
 
+import scala.util.{Failure, Success}
+
 import akka.actor.{Actor, ActorLogging}
 import akka.http.scaladsl._
 import akka.http.scaladsl.model._
-import akka.stream.scaladsl._
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
+import akka.stream.scaladsl._
 import akka.util.ByteString
-import org.apache.commons.codec.binary.Hex
 
-import scala.util.{Failure, Success}
+import com.karasiq.bittorrent.utils.Utils
 
 class HttpTracker extends Actor with ActorLogging {
   import context.dispatcher
@@ -36,8 +37,8 @@ class HttpTracker extends Actor with ActorLogging {
       )
 
       val query = params.collect {
-        case (key: String, str: ByteString) if str.nonEmpty ⇒
-          key → Hex.encodeHexString(str.toArray).grouped(2).mkString("%", "%", "")
+        case (key: String, bytes: ByteString) if bytes.nonEmpty ⇒
+          key → Utils.toHexString(bytes).grouped(2).mkString("%", "%", "")
 
         case (key: String, str: String) if str.nonEmpty ⇒
           key → str

@@ -61,7 +61,7 @@ object PeerStreamEncryption {
       else if (keyBytes.length == PublicKeyLength)
         ByteString(keyBytes)
       else
-        throw new IllegalArgumentException(s"Invalid DH key: $key")
+        throw new IllegalArgumentException(s"Invalid DH key length: ${keyBytes.length}")
     }
 
     def generateKey(): KeyPair = {

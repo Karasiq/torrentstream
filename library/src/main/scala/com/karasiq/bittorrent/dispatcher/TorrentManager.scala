@@ -1,41 +1,44 @@
 package com.karasiq.bittorrent.dispatcher
 
-import akka.actor._
-import akka.pattern.{ask, pipe}
-import akka.stream.actor.ActorPublisher
-import akka.stream.scaladsl.Tcp._
-import akka.stream.scaladsl._
-import akka.stream.{ActorMaterializer, SourceShape}
-import akka.util.{ByteString, Timeout}
-import com.karasiq.bittorrent.format.Torrent
-import com.karasiq.bittorrent.protocol.PeerMessages.PeerHandshake
-import org.apache.commons.codec.binary.Hex
-
+import scala.collection.mutable
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.language.postfixOps
+
+import akka.actor._
+import akka.pattern.{ask, pipe}
+import akka.stream.{Materializer, SourceShape}
+import akka.stream.actor.ActorPublisher
+import akka.stream.scaladsl._
+import akka.stream.scaladsl.Tcp._
+import akka.util.{ByteString, Timeout}
+
+import com.karasiq.bittorrent.dispatcher.PeerDispatcher.{DispatcherData, RequestDispatcherData}
+import com.karasiq.bittorrent.format.Torrent
+import com.karasiq.bittorrent.protocol.PeerMessages.PeerHandshake
+import com.karasiq.bittorrent.utils.Utils
 
 case class CreateDispatcher(torrent: Torrent)
 case class RequestDispatcher(infoHash: ByteString)
 case class PeerDispatcherData(torrent: Torrent, actorRef: ActorRef, state: SeedData)
 
 class TorrentManager extends Actor with ActorLogging {
-  private implicit val ec = context.dispatcher
-  implicit val timeout = Timeout(10 seconds)
-  private var dispatchers = Vector.empty[(Torrent, ActorRef)]
+  private[this] implicit val executionContext = context.dispatcher
+  private[this] implicit val askTimeout = Timeout(10 seconds)
+  private[this] val dispatchers = mutable.AnyRefMap.empty[ByteString, (Torrent, ActorRef)]
 
   //noinspection VariablePatternShadow
   override def receive: Receive = {
     case CreateDispatcher(torrent) ⇒
       val sender = context.sender()
-      val dispatcher = dispatchers.find(_._1.infoHash == torrent.infoHash) match {
+      val dispatcher = dispatchers.get(torrent.infoHash) match {
         case Some((_, dispatcher)) ⇒
           dispatcher
 
         case None ⇒
           val dispatcher = context.actorOf(PeerDispatcher.props(torrent))
           context.watch(dispatcher)
-          dispatchers :+= torrent → dispatcher
+          dispatchers += torrent.infoHash → (torrent, dispatcher)
           dispatcher
       }
       (dispatcher ? RequestDispatcherData).collect {
@@ -44,7 +47,7 @@ class TorrentManager extends Actor with ActorLogging {
       }.pipeTo(sender)
 
     case RequestDispatcher(infoHash) ⇒
-      dispatchers.find(_._1.infoHash == infoHash).foreach {
+      dispatchers.get(infoHash).foreach {
         case (torrent, dispatcher) ⇒
           (dispatcher ? RequestDispatcherData).collect {
             case DispatcherData(data) ⇒
@@ -52,11 +55,13 @@ class TorrentManager extends Actor with ActorLogging {
           }.pipeTo(sender)
 
         case _ ⇒
-          log.warning("Dispatcher not found for info hash: {}", Hex.encodeHexString(infoHash.toArray))
+          log.warning("Dispatcher not found for info hash: {}", Utils.toHexString(infoHash))
       }
 
-    case Terminated(dispatcher) ⇒
-      dispatchers = dispatchers.filterNot(_._2 == dispatcher)
+    case Terminated(terminated) ⇒
+      dispatchers.foreach { case (infoHash, (_, dispatcher)) ⇒
+        if (dispatcher == terminated) dispatchers -= infoHash
+      }
   }
 }
 
@@ -65,7 +70,8 @@ object TorrentManager {
     Props[TorrentManager]
   }
 
-  def listener(manager: ActorRef)(implicit arf: ActorRefFactory, am: ActorMaterializer): Sink[IncomingConnection, Future[akka.Done]] = {
+  def listener(manager: ActorRef)(implicit actorRefFactory: ActorRefFactory,
+                                  materializer: Materializer): Sink[IncomingConnection, Future[akka.Done]] = {
     import akka.pattern.ask
     implicit val timeout = Timeout(10 seconds)
 
@@ -78,7 +84,7 @@ object TorrentManager {
           (manager ? RequestDispatcher(infoHash)).mapTo[PeerDispatcherData].zip(Future.successful(Source.single(hs).concat(messages)))
         }
         .flatMapConcat { case (PeerDispatcherData(torrent, dispatcher, ownData), messages) ⇒
-          val messageProcessor = arf.actorOf(PeerConnection.props(dispatcher, torrent, connection.remoteAddress, ownData))
+          val messageProcessor = actorRefFactory.actorOf(PeerConnection.props(dispatcher, torrent, connection.remoteAddress, ownData))
           Source.fromGraph(GraphDSL.create() { implicit b ⇒
             b.add(messages.to(Sink.foreach(messageProcessor ! _)))
             val output = b.add(Source.fromPublisher(ActorPublisher[ByteString](messageProcessor)))

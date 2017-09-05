@@ -2,7 +2,9 @@ package com.karasiq.torrentstream.app
 
 import com.karasiq.bittorrent.format.Torrent
 
-private[app] case class TorrentInfo(announceList: Seq[Seq[String]], comment: String, createdBy: String, files: Seq[(String, Long)], infoHash: String, name: String, size: Long)
+private[app] case class TorrentInfo(announceList: Seq[Seq[String]], comment: String,
+                                    createdBy: String, files: Seq[(String, Long)],
+                                    infoHash: String, name: String, size: Long)
 
 private[app] object TorrentInfo {
   def fromTorrent(torrent: Torrent): TorrentInfo = {

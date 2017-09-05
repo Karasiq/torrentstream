@@ -14,55 +14,30 @@ import org.apache.commons.io.FilenameUtils
 
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.torrentstream.TorrentStream
-import com.karasiq.torrentstream.app.AppSerializers.StringInfoHashOps
+import com.karasiq.torrentstream.app.AppSerializers.StringConversions
 
 private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
                              (implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer)
   extends AppSerializers.Marshallers {
 
-  private[this] val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
-  private[this] val bufferSize = config.getInt("buffer-size") // In bytes
-
-  // Extracts `Range` header value
-  private[this] def rangesHeaderValue(torrent: Torrent): Directive1[Vector[(Long, Long)]] = {
-    def normalizeRange(range: (Long, Long)): (Long, Long) = {
-      val end = math.min(torrent.size, range._2)
-      val start = math.min(end, math.max(0L, range._1))
-      (start, end)
-    }
-
-    optionalHeaderValueByType[Range]().map {
-      case Some(httpRanges) ⇒
-        import akka.http.scaladsl.model.headers.ByteRange
-        val resultRanges = httpRanges.ranges.map {
-          case ByteRange.Suffix(length) ⇒
-            (torrent.size - length, torrent.size)
-
-          case ByteRange.Slice(first, last) ⇒
-            (first, last + 1)
-
-          case ByteRange.FromOffset(offset) ⇒
-            (offset, torrent.size)
-        }
-
-        resultRanges.map(normalizeRange).toVector
-
-      case None ⇒
-        Vector.empty[(Long, Long)]
-    }
+  // -----------------------------------------------------------------------
+  // Config
+  // -----------------------------------------------------------------------
+  protected object settings {
+    private[this] val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.streamer")
+    val bufferSize = config.getInt("buffer-size") // In bytes
   }
 
-  private[this] def createTorrentStream(torrent: Torrent, fileName: String, ranges: Seq[(Long, Long)]): Directive1[TorrentStream] = {
-    provide(TorrentStream.create(torrentManager, torrent, fileName, ranges))
-  }
-
+  // -----------------------------------------------------------------------
+  // Routes
+  // -----------------------------------------------------------------------
   val route = {
     get {
       path("info") {
-        parameter('hash) { hash ⇒
-          val torrentId = hash.infoHash
-          validate(store.contains(torrentId), "Unknown torrent info hash") {
-            complete(store.info(torrentId))
+        parameter('hash) { hashString ⇒
+          val infoHash = hashString.decodeHexString
+          validate(store.contains(infoHash), "Unknown torrent info hash") {
+            complete(store.info(infoHash))
           }
         } ~
         parameters('offset.as[Int], 'count.as[Int]) { (offset, count) ⇒
@@ -70,15 +45,18 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
         } ~
         complete(store.size) // Torrent count
       } ~
-      (path("stream") & parameters('hash, 'file)) { (hash, file) ⇒
-        val torrentId = hash.infoHash
-        validate(store.contains(torrentId), "Unknown torrent info hash") {
-          val torrent = store(torrentId)
-          rangesHeaderValue(torrent) { ranges ⇒
-            createTorrentStream(torrent, file, ranges) { stream ⇒
-              respondWithHeader(`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" → FilenameUtils.getName(file)))) {
-                val buffered = stream.source.buffer(bufferSize / torrent.data.pieceLength, OverflowStrategy.backpressure)
-                complete(if (ranges.isEmpty) StatusCodes.OK else StatusCodes.PartialContent, HttpEntity(ContentTypes.NoContentType, stream.size, buffered))
+      (path("stream") & parameters('hash, 'file)) { (hashString, file) ⇒
+        val infoHash = hashString.decodeHexString
+        validate(store.contains(infoHash), "Unknown torrent info hash") {
+          val torrent = store(infoHash)
+          directives.rangesHeaderValue(torrent) { ranges ⇒
+            directives.createTorrentStream(torrent, file, ranges) { stream ⇒
+              val fileName = FilenameUtils.getName(file)
+              respondWithHeader(`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" → fileName))) {
+                val bufferCount = settings.bufferSize / torrent.data.pieceSize
+                val bufferedStream = stream.source.buffer(bufferCount, OverflowStrategy.backpressure)
+                complete(if (ranges.isEmpty) StatusCodes.OK else StatusCodes.PartialContent,
+                  HttpEntity(ContentTypes.NoContentType, stream.size, bufferedStream))
               }
             }
           }
@@ -91,7 +69,7 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
     } ~
     post {
       (path("upload") & entity(as[ByteString])) { data ⇒
-        Torrent.decode(data) match {
+        Torrent.tryDecode(data) match {
           case Some(torrent) ⇒
             if (store.contains(torrent.infoHash)) {
               complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
@@ -109,16 +87,57 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
       }
     } ~
     delete {
-      (path("torrent") & parameter('hash)) { hash ⇒
-        val torrentId = hash.infoHash
-        validate(store.contains(torrentId), "Unknown torrent info hash") {
+      (path("torrent") & parameter('hash)) { hashString ⇒
+        val infoHash = hashString.decodeHexString
+        validate(store.contains(infoHash), "Unknown torrent info hash") {
           extractLog { log ⇒
-            store -= torrentId
-            log.info("Torrent removed: {}", hash)
-            complete(StatusCodes.OK, hash)
+            store -= infoHash
+            log.info("Torrent removed: {}", hashString)
+            complete(StatusCodes.OK, hashString)
           }
         }
       }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Directives
+  // -----------------------------------------------------------------------
+  protected object directives {
+    type RangeT = (Long, Long)
+    type RangesT = Vector[RangeT]
+
+    // Extracts `Range` header value
+    def rangesHeaderValue(torrent: Torrent): Directive1[RangesT] = {
+      def normalizeRange(range: RangeT): RangeT = {
+        val end = math.min(torrent.size, range._2)
+        val start = math.min(end, math.max(0L, range._1))
+        (start, end)
+      }
+
+      optionalHeaderValueByType[Range]().map {
+        case Some(httpRanges) ⇒
+          import akka.http.scaladsl.model.headers.ByteRange
+          val resultRanges = httpRanges.ranges.map {
+            case ByteRange.Suffix(length) ⇒
+              (torrent.size - length, torrent.size)
+
+            case ByteRange.Slice(first, last) ⇒
+              (first, last + 1)
+
+            case ByteRange.FromOffset(offset) ⇒
+              (offset, torrent.size)
+          }
+
+          resultRanges.map(normalizeRange).toVector
+
+        case None ⇒
+          Vector.empty[RangeT]
+      }
+    }
+
+    def createTorrentStream(torrent: Torrent, fileName: String, ranges: RangesT): Directive1[TorrentStream] = {
+      provide(TorrentStream.create(torrentManager, torrent, fileName, ranges))
     }
   }
 }

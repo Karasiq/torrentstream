@@ -2,11 +2,12 @@ package com.karasiq.bittorrent.protocol
 
 import java.nio.ByteBuffer
 
-import akka.util.ByteString
-import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
-
 import scala.collection.BitSet
 import scala.util.Try
+
+import akka.util.ByteString
+
+import com.karasiq.bittorrent.protocol.extensions.PeerExtensions
 
 private[bittorrent] object BitTorrentTcpProtocol {
   def int32FromBytes(bytes: ByteString): Int = {
@@ -38,7 +39,7 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
       val byteBuffer = ByteBuffer.allocate(1 + 8 + protocolBytes.length + 20 + 20)
       byteBuffer.put(protocolBytes.length.toByte)
       byteBuffer.put(protocolBytes)
-      byteBuffer.put(ph.extensions.toBytes)
+      byteBuffer.put(ph.extensions.toByteArray)
       byteBuffer.put(ph.infoHash.toByteBuffer)
       byteBuffer.put(ph.peerId.toByteBuffer)
       byteBuffer.flip()
@@ -49,12 +50,12 @@ trait BitTorrentTcpProtocol { self: BitTorrentMessages ⇒
       Try {
         val buffer = bs.toByteBuffer
         val length = buffer.getByteInt
-        assert(length <= buffer.remaining() - 48)
+        assert(length <= buffer.remaining() - 48, "Invalid length")
         val protocol = buffer.getByteString(length)
         val reserved = buffer.getByteString(8)
         val infoHash = buffer.getByteString(20)
         val id = buffer.getByteString(20)
-        PeerHandshake(new String(protocol.toArray, "ASCII"), infoHash, id, PeerExtensions.fromBytes(reserved.toArray))
+        PeerHandshake(new String(protocol.toArray, "ASCII"), infoHash, id, PeerExtensions.fromBytes(reserved))
       }.toOption
     }
   }

@@ -20,7 +20,7 @@ object TorrentStream {
     val source = Source.single(torrent)
       .via(TorrentSource.dispatcher(torrentManager))
       .flatMapConcat(dsp ⇒ TorrentSource.pieces(dsp.actorRef, pieces.pieces.toVector))
-      .via(TorrentStreamingStage(torrent.data.pieceLength, pieces.offsets))
+      .via(TorrentStreamingStage(torrent.data.pieceSize, pieces.offsets))
 
     TorrentStream(pieces.size, source)
   }

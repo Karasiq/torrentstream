@@ -4,6 +4,7 @@ import java.net.{InetAddress, InetSocketAddress}
 import java.nio.ByteBuffer
 
 import akka.util.ByteString
+
 import com.karasiq.bittorrent.format.{BEncode, BEncodedDictionary, BEncodedNumber, BEncodedString}
 import com.karasiq.bittorrent.protocol.{BitTorrentTcpProtocol, TcpMessageProtocol}
 
@@ -21,14 +22,14 @@ trait ExtensionProtocolMessageIds {
 }
 
 trait ExtensionProtocolMessages {
-  case class EpHandshake(messages: Map[Int, String], version: Option[String] = None, requests: Option[Int] = None, address: Option[InetSocketAddress] = None)
+  case class EPHandshake(messages: Map[Int, String], version: Option[String] = None, requests: Option[Int] = None, address: Option[InetSocketAddress] = None)
 
   case class ExtendedMessage(id: Int, payload: ByteString)
 }
 
 trait ExtensionProtocolTcp { self: ExtensionProtocolMessages ⇒
-  implicit object EpHandshakeTcpProtocol extends TcpMessageProtocol[EpHandshake] {
-    override def toBytes(value: EpHandshake): ByteString = {
+  implicit object EpHandshakeTcpProtocol extends TcpMessageProtocol[EPHandshake] {
+    override def toBytes(value: EPHandshake): ByteString = {
       val messageIds = BEncodedDictionary(value.messages.toSeq.map {
         case (id, key) ⇒
           key → BEncodedNumber(id)
@@ -51,7 +52,7 @@ trait ExtensionProtocolTcp { self: ExtensionProtocolMessages ⇒
         .toBytes
     }
 
-    override def fromBytes(bs: ByteString): Option[EpHandshake] = {
+    override def fromBytes(bs: ByteString): Option[EPHandshake] = {
       import com.karasiq.bittorrent.format.BEncodeImplicits._
       BEncode.parse(bs.toArray[Byte]).collectFirst {
         case BEncodedDictionary(values) ⇒
@@ -67,12 +68,12 @@ trait ExtensionProtocolTcp { self: ExtensionProtocolMessages ⇒
               Nil
           }
           val address = for {
-            a <- map.byteString("ipv6").filter(_.length == 16)
-              .orElse(map.byteString("ipv4").filter(_.length == 4))
+            a <- map.bytes("ipv6").filter(_.length == 16)
+              .orElse(map.bytes("ipv4").filter(_.length == 4))
               .map(a ⇒ InetAddress.getByAddress(a.toArray))
             p <- map.int("p")
           } yield new InetSocketAddress(a, p)
-          EpHandshake(messageIds.toMap, map.string("v"), map.int("reqq"), address)
+          EPHandshake(messageIds.toMap, map.string("v"), map.int("reqq"), address)
       }
     }
   }

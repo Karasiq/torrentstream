@@ -1,9 +1,9 @@
 package com.karasiq.bittorrent.format
 
-import akka.util.ByteString
-
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
+
+import akka.util.ByteString
 
 case class TorrentPiece(index: Int, size: Int, sha1: ByteString, file: TorrentFile)
 case class TorrentPieceBlock(piece: TorrentPiece, offset: Int, size: Int)
@@ -19,7 +19,7 @@ object TorrentPiece {
         pieceSequenceRec(buffer, offset, 0L, pieceIndex, fs)
 
       case fs @ Seq(currentFile, _*) if offset < totalSize ⇒
-        val length = Array(files.pieceLength.toLong, totalSize - offset).min
+        val length = Array(files.pieceSize.toLong, totalSize - offset).min
         require(length <= Int.MaxValue)
         val sha1 = files.pieces.slice(pieceIndex * 20, (pieceIndex * 20) + 20)
         val piece = TorrentPiece(buffer.length, length.toInt, sha1, currentFile)

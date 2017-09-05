@@ -12,7 +12,7 @@ case class TorrentRangeList(pieces: Seq[TorrentPiece], offsets: Seq[TorrentFileO
 
 object TorrentFileOffset {
   private def pieceOffset(torrent: Torrent, piece: TorrentPiece): TorrentFileOffset = {
-    val start = torrent.data.pieceLength.toLong * piece.index
+    val start = torrent.data.pieceSize.toLong * piece.index
     val end = start + piece.size
     TorrentFileOffset(piece.file, start, end)
   }

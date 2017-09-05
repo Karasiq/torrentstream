@@ -1,29 +1,30 @@
 package com.karasiq.bittorrent.streams
 
-import akka.actor._
-import akka.stream.actor.ActorPublisher
-import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
-import com.karasiq.bittorrent.dispatcher.MessageConversions._
-import com.karasiq.bittorrent.dispatcher._
-import com.karasiq.bittorrent.protocol.PeerMessages.PieceBlockRequest
-
 import scala.annotation.tailrec
 import scala.language.postfixOps
 
+import akka.actor._
+import akka.stream.actor.ActorPublisher
+import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
+
+import com.karasiq.bittorrent.dispatcher._
+import com.karasiq.bittorrent.dispatcher.MessageConversions._
+import com.karasiq.bittorrent.protocol.PeerMessages.PieceBlockRequest
+
 object PeerBlockPublisher {
   def props(peerDispatcher: ActorRef, pieceSize: Int): Props = {
-    Props(classOf[PeerBlockPublisher], peerDispatcher, pieceSize)
+    Props(new PeerBlockPublisher(peerDispatcher, pieceSize))
   }
 }
 
 class PeerBlockPublisher(peerDispatcher: ActorRef, pieceSize: Int) extends Actor with ActorPublisher[DownloadedBlock] with ActorLogging {
   // Buffers
   private var requested = Set.empty[PieceBlockRequest]
-  private var buffer = Vector.empty[DownloadedBlock]
+  private var buffer = List.empty[DownloadedBlock]
   private var currentOffset = 0
 
   override def postStop(): Unit = {
-    for (PieceBlockRequest(index, offset, length) <- requested) {
+    for (PieceBlockRequest(index, offset, length) ← requested) {
       peerDispatcher ! CancelBlockDownload(index, offset, length)
     }
     super.postStop()

@@ -3,7 +3,7 @@ package com.karasiq.bittorrent.format
 import akka.util.ByteString
 
 object BEncodeImplicits {
-  implicit class BEncodedValueOps(val value: BEncodedValue) extends AnyVal {
+  implicit class BEncodedValueOps(private val value: BEncodedValue) extends AnyVal {
     def asDict: Map[String, BEncodedValue] = value match {
       case BEncodedDictionary(values) ⇒
         values.toMap
@@ -25,7 +25,7 @@ object BEncodeImplicits {
         bs.utf8String
 
       case _ ⇒
-        throw new IllegalArgumentException
+        throw new IllegalArgumentException(s"Not a string: $value")
     }
 
     def asNumber: Long = value match {
@@ -33,7 +33,7 @@ object BEncodeImplicits {
         num
 
       case _ ⇒
-        throw new IllegalArgumentException
+        throw new IllegalArgumentException(s"Not a number: $value")
     }
 
     def asByteString: ByteString = value match {
@@ -41,17 +41,17 @@ object BEncodeImplicits {
         bs
 
       case _ ⇒
-        throw new IllegalArgumentException
+        throw new IllegalArgumentException(s"Not a bytes: $value")
     }
   }
 
-  implicit class BEncodedDictOps(val dict: Map[String, BEncodedValue]) extends AnyVal {
+  implicit class BEncodedDictOps(private val dict: Map[String, BEncodedValue]) extends AnyVal {
     def string(key: String): Option[String] = dict.get(key).collect {
       case BEncodedString(bs) ⇒
         bs.utf8String
     }
 
-    def byteString(key: String): Option[ByteString] = dict.get(key).collect {
+    def bytes(key: String): Option[ByteString] = dict.get(key).collect {
       case BEncodedString(bs) ⇒
         bs
     }
@@ -61,13 +61,8 @@ object BEncodeImplicits {
         num
     }
 
-    def int(key: String): Option[Int] = dict.get(key).collect {
-      case BEncodedNumber(num) ⇒
-        num.toInt
-    }
-
+    def int(key: String): Option[Int] = long(key).map(_.toInt)
     def array(key: String): Seq[BEncodedValue] = dict.get(key).map(_.asArray).getOrElse(Nil)
-
     def dict(key: String): Map[String, BEncodedValue] = dict.get(key).map(_.asDict).getOrElse(Map.empty)
   }
 }

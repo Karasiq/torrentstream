@@ -4,6 +4,7 @@ import java.net.{InetAddress, InetSocketAddress}
 import java.nio.ByteBuffer
 
 import akka.util.ByteString
+
 import com.karasiq.bittorrent.format.{BEncode, BEncodedDictionary, BEncodedString}
 import com.karasiq.bittorrent.protocol.{BitTorrentTcpProtocol, TcpMessageProtocol}
 
@@ -41,8 +42,8 @@ trait PeerExchangeTcp { self: PeerExchangeMessages ⇒
       BEncode.parse(bs.toArray[Byte]).collectFirst {
         case BEncodedDictionary(values) ⇒
           val map = values.toMap
-          val ipv4 = map.byteString("added").fold(Iterator[ByteString]())(_.grouped(ipv4Length + portLength))
-          val ipv6 = map.byteString("added6").fold(Iterator[ByteString]())(_.grouped(ipv6Length + portLength))
+          val ipv4 = map.bytes("added").fold(Iterator[ByteString]())(_.grouped(ipv4Length + portLength))
+          val ipv6 = map.bytes("added6").fold(Iterator[ByteString]())(_.grouped(ipv6Length + portLength))
           val addresses = (ipv4 ++ ipv6).map { bytes ⇒
             val address = InetAddress.getByAddress(bytes.dropRight(portLength).toArray)
             val port = BitTorrentTcpProtocol.int32FromBytes(bytes.takeRight(portLength))

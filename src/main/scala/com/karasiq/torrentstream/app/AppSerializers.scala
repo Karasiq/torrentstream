@@ -8,9 +8,9 @@ import boopickle.Default._
 import org.apache.commons.codec.binary.Hex
 
 private[app] object AppSerializers {
-  implicit class StringInfoHashOps(val hash: String) extends AnyVal {
-    def infoHash: ByteString = {
-      ByteString(Hex.decodeHex(hash.toCharArray))
+  implicit class StringConversions(private val str: String) extends AnyVal {
+    def decodeHexString: ByteString = {
+      ByteString(Hex.decodeHex(str.toCharArray))
     }
   }
 
