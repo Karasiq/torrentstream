@@ -1,15 +1,16 @@
 package com.karasiq.bittorrent.streams
 
+import scala.concurrent.duration._
+import scala.language.postfixOps
+
 import akka.actor.ActorRef
 import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Source}
 import akka.util.{ByteString, Timeout}
+
 import com.karasiq.bittorrent.dispatcher._
 import com.karasiq.bittorrent.format.{Torrent, TorrentPiece}
 import com.karasiq.bittorrent.protocol.PeerMessages.PieceBlockRequest
-
-import scala.concurrent.duration._
-import scala.language.postfixOps
 
 object TorrentSource {
   private[streams] def pieceBlocks(peerDispatcher: ActorRef, index: Int, piece: TorrentPiece, blockSize: Int): Source[ByteString, _] = {
@@ -33,7 +34,7 @@ object TorrentSource {
   }
 
   def torrent(dispatcher: ActorRef, torrent: Torrent): Source[DownloadedPiece, akka.NotUsed] = {
-    pieces(dispatcher, TorrentPiece.pieces(torrent.data).toVector)
+    pieces(dispatcher, TorrentPiece.pieces(torrent.content).toVector)
   }
 
   def dispatcher(torrentManager: ActorRef): Flow[Torrent, PeerDispatcherData, akka.NotUsed] = {

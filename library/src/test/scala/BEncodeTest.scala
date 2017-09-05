@@ -22,20 +22,20 @@ class BEncodeTest extends FlatSpec with Matchers  {
     torrent.announceList shouldBe Vector(Vector("http://torrent.ubuntu.com:6969/announce"), Vector("http://ipv6.torrent.ubuntu.com:6969/announce"))
     torrent.comment shouldBe Some("Ubuntu CD releases.ubuntu.com")
     torrent.date shouldBe Some(Instant.parse("2015-10-22T09:48:19Z"))
-    torrent.data.pieceSize shouldBe 524288L
-    torrent.data.pieces.length shouldBe 44960
-    torrent.data.files.headOption shouldBe Some(TorrentFile("ubuntu-15.10-desktop-amd64.iso", 1178386432L))
+    torrent.content.pieceSize shouldBe 524288L
+    torrent.content.pieces.length shouldBe 44960
+    torrent.content.files.headOption shouldBe Some(TorrentFile("ubuntu-15.10-desktop-amd64.iso", 1178386432L))
   }
 
   "Torrent pieces" should "be constructed" in {
-    val pieces = TorrentPiece.pieces(torrent.data)
-    pieces.length shouldBe (torrent.data.pieces.length / 20)
+    val pieces = TorrentPiece.pieces(torrent.content)
+    pieces.length shouldBe (torrent.content.pieces.length / 20)
     pieces.map(_.size).sum shouldBe torrent.size
     pieces.head.sha1.length shouldBe 20
   }
 
   "Torrent piece blocks" should "be constructed" in {
-    val pieces = TorrentPiece.pieces(torrent.data)
+    val pieces = TorrentPiece.pieces(torrent.content)
     val blocks = TorrentPiece.blocks(pieces.head, 10000)
     blocks.map(_.size).sum shouldBe pieces.head.size
   }

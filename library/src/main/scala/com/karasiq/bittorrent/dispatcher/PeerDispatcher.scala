@@ -55,7 +55,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     private[this] val dispatcherConfig = rootConfig.getConfig("peer-dispatcher")
     val blockSize = dispatcherConfig.getInt("block-size")
     val maxPeers = dispatcherConfig.getInt("max-peers")
-    val bufferSize = dispatcherConfig.getInt("buffer-size") / torrent.data.pieceSize
+    val bufferSize = dispatcherConfig.getInt("buffer-size") / torrent.content.pieceSize
     val ownAddress = new InetSocketAddress(dispatcherConfig.getString("listen-host"), dispatcherConfig.getInt("listen-port"))
     val peerId = PeerDispatcher.generatePeerId(dispatcherConfig.getString("peer-id-prefix"))
 

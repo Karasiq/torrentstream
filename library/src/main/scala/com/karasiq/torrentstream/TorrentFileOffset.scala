@@ -12,20 +12,20 @@ case class TorrentRangeList(pieces: Seq[TorrentPiece], offsets: Seq[TorrentFileO
 
 object TorrentFileOffset {
   private def pieceOffset(torrent: Torrent, piece: TorrentPiece): TorrentFileOffset = {
-    val start = torrent.data.pieceSize.toLong * piece.index
+    val start = torrent.content.pieceSize.toLong * piece.index
     val end = start + piece.size
     TorrentFileOffset(piece.file, start, end)
   }
 
   def file(torrent: Torrent, file: TorrentFile): TorrentRangeList = {
-    val pieces = TorrentPiece.pieces(torrent.data).filter(_.file == file)
+    val pieces = TorrentPiece.pieces(torrent.content).filter(_.file == file)
     val start = pieces.headOption.map(p ⇒ pieceOffset(torrent, p).start).getOrElse(0L)
     val end = start + file.size
     TorrentRangeList(pieces, Vector(TorrentFileOffset(file, start, end)))
   }
 
   def absoluteOffsets(torrent: Torrent, offsets: Seq[TorrentFileOffset]): TorrentRangeList = {
-    val pieces = TorrentPiece.pieces(torrent.data).collect {
+    val pieces = TorrentPiece.pieces(torrent.content).collect {
       case piece @ TorrentPiece(_, _, _, file) if offsets.exists(_.file == file) ⇒
         piece
     }

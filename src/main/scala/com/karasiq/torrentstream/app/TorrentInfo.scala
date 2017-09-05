@@ -12,9 +12,9 @@ private[app] object TorrentInfo {
       if (torrent.announceList.nonEmpty) torrent.announceList else Vector(Vector(torrent.announce)),
       torrent.comment.getOrElse(""),
       torrent.createdBy.getOrElse(""),
-      torrent.data.files.map(f ⇒ f.name → f.size),
+      torrent.content.files.map(f ⇒ f.name → f.size),
       torrent.infoHashString,
-      torrent.data.name,
+      torrent.content.name,
       torrent.size
     )
   }

@@ -48,6 +48,6 @@ class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
         .runWith(Sink.head)
       Await.result(response, Duration.Inf)
     }
-    piece.data.length shouldBe torrent.data.pieceSize
+    piece.data.length shouldBe torrent.content.pieceSize
   }
 }

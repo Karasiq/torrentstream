@@ -53,7 +53,7 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
             directives.createTorrentStream(torrent, file, ranges) { stream ⇒
               val fileName = FilenameUtils.getName(file)
               respondWithHeader(`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" → fileName))) {
-                val bufferCount = settings.bufferSize / torrent.data.pieceSize
+                val bufferCount = settings.bufferSize / torrent.content.pieceSize
                 val bufferedStream = stream.source.buffer(bufferCount, OverflowStrategy.backpressure)
                 complete(if (ranges.isEmpty) StatusCodes.OK else StatusCodes.PartialContent,
                   HttpEntity(ContentTypes.NoContentType, stream.size, bufferedStream))
@@ -76,7 +76,7 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
             } else {
               extractLog { log ⇒
                 store += torrent.infoHash → torrent
-                log.info(s"Torrent uploaded: {} {}", torrent.data.name, torrent.infoHashString)
+                log.info(s"Torrent uploaded: {} {}", torrent.content.name, torrent.infoHashString)
                 complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
               }
             }

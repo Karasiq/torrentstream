@@ -9,7 +9,7 @@ case class TorrentPiece(index: Int, size: Int, sha1: ByteString, file: TorrentFi
 case class TorrentPieceBlock(piece: TorrentPiece, offset: Int, size: Int)
 
 object TorrentPiece {
-  def pieces(files: TorrentFiles): IndexedSeq[TorrentPiece] = {
+  def pieces(files: TorrentContent): IndexedSeq[TorrentPiece] = {
     // Total torrent size
     val totalSize = files.files.map(_.size).sum
 

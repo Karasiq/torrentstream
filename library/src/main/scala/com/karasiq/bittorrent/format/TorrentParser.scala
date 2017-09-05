@@ -77,7 +77,7 @@ trait DefaultTorrentParser extends TorrentParser {
       values.map(_.asString).mkString("/")
   }
 
-  private[this] def toFileList(v: BEncodedValue): Option[TorrentFiles] = v match {
+  private[this] def toFileList(v: BEncodedValue): Option[TorrentContent] = v match {
     case BEncodedDictionary(seq) ⇒
       val data = seq.toMap
       val files = data.get("files").collect {
@@ -103,14 +103,14 @@ trait DefaultTorrentParser extends TorrentParser {
           pieceLength ← pieceLength
           pieces ← pieces
           files ← files
-        } yield TorrentFiles(name, pieceLength, pieces, files)
+        } yield TorrentContent(name, pieceLength, pieces, files)
       } else {
         for {
           name ← name
           length ← data.long("length")
           pieceLength ← pieceLength
           pieces ← pieces
-        } yield TorrentFiles(name, pieceLength, pieces, Vector(TorrentFile(name, length)))
+        } yield TorrentContent(name, pieceLength, pieces, Vector(TorrentFile(name, length)))
       }
 
     case _ ⇒
