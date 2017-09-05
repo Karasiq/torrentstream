@@ -3,10 +3,10 @@ TorrentStream is a torrent streaming engine, written in [Scala](http://scala-lan
 
 # How to use
 * As an application
-  * Start server with `sbt run`, or use [precompiled package](https://github.com/Karasiq/torrentstream/releases/download/v1.0.2/torrentstream-1.0.3.zip)
+  * Start server with `sbt run`, or use [precompiled package](https://github.com/Karasiq/torrentstream/releases/download/v1.0.4/torrentstream-1.0.4.zip)
   * Open http://127.0.0.1:8901 in browser
 * As a library
-  * `libraryDependencies += "com.github.karasiq" %% "bittorrent" % "1.0.3"`
+  * `libraryDependencies += "com.github.karasiq" %% "bittorrent" % "1.0.4"`
 
 # License
 Copyright 2016 Karasiq

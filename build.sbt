@@ -1,7 +1,7 @@
 lazy val commonSettings = Seq(
   organization := "com.github.karasiq",
   isSnapshot := false,
-  version := "1.0.3",
+  version := "1.0.4",
   scalaVersion := "2.11.8"
 )
 
