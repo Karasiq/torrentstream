@@ -16,7 +16,7 @@ private[bittorrent] object MessageConversions {
       BlockDownloadFailed(pb.index, pb.offset, pb.length)
     }
 
-    def relatedTo(pb1: PieceBlockInfo): Boolean = {
+    def isRelatedTo(pb1: PieceBlockInfo): Boolean = {
       pb.index == pb1.index && pb.offset == pb1.offset && pb.length == pb1.length
     }
   }

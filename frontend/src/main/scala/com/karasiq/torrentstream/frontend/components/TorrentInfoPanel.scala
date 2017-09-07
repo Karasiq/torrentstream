@@ -1,12 +1,13 @@
 package com.karasiq.torrentstream.frontend.components
 
-import com.karasiq.bootstrap.BootstrapImplicits._
-import com.karasiq.bootstrap.{Bootstrap, BootstrapComponent}
-import com.karasiq.torrentstream.frontend.TorrentInfo
-import rx._
-
 import scala.scalajs.js.URIUtils
 import scalatags.JsDom.all._
+
+import rx._
+
+import com.karasiq.bootstrap.{Bootstrap, BootstrapComponent}
+import com.karasiq.bootstrap.BootstrapImplicits._
+import com.karasiq.torrentstream.shared.TorrentInfo
 
 final class TorrentInfoPanel(implicit ctx: Ctx.Owner) extends BootstrapComponent {
   val torrent: Var[Option[TorrentInfo]] = Var(None)

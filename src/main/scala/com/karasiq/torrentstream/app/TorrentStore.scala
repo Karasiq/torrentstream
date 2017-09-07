@@ -4,16 +4,18 @@ import java.io.Closeable
 import java.nio.file.Paths
 import java.time.Instant
 
+import scala.collection.mutable
+
 import akka.util.ByteString
 import boopickle.Default._
-import com.karasiq.bittorrent.format.Torrent
-import com.karasiq.mapdb.{MapDbSingleFileProducer, MapDbWrapper}
 import com.typesafe.config.Config
+import org.mapdb.Serializer
 import org.mapdb.BTreeKeySerializer.ArrayKeySerializer
 import org.mapdb.DBMaker.Maker
-import org.mapdb.Serializer
 
-import scala.collection.mutable
+import com.karasiq.bittorrent.format.Torrent
+import com.karasiq.mapdb.{MapDbSingleFileProducer, MapDbWrapper}
+import com.karasiq.torrentstream.shared.TorrentInfo
 
 final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent] with Closeable with AppSerializers.Picklers {
   private object DbProvider extends MapDbSingleFileProducer(Paths.get(config.getString("karasiq.torrentstream.store.path"))) {
@@ -74,7 +76,7 @@ final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent
     if (!timeMap.contains(infoHash)) {
       map += kv
       val now = Instant.now().toEpochMilli
-      infoMap += (Array[Any](now, infoHash.hashCode()) → TorrentInfo.fromTorrent(torrent))
+      infoMap += (Array[Any](now, infoHash.hashCode()) → TorrentUtils.toTorrentInfo(torrent))
       timeMap += infoHash → now
     }
     this

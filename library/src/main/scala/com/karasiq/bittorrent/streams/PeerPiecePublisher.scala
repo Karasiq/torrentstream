@@ -2,21 +2,22 @@ package com.karasiq.bittorrent.streams
 
 import java.security.MessageDigest
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Props}
-import akka.stream.actor.ActorPublisher
-import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
-import akka.stream.scaladsl.Sink
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
-import akka.util.ByteString
-import com.karasiq.bittorrent.dispatcher._
-import com.karasiq.bittorrent.format.TorrentPiece
-
 import scala.language.postfixOps
 import scala.util.{Failure, Success}
 
+import akka.actor.{Actor, ActorLogging, ActorRef, Props}
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
+import akka.stream.actor.ActorPublisher
+import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
+import akka.stream.scaladsl.Sink
+import akka.util.ByteString
+
+import com.karasiq.bittorrent.dispatcher._
+import com.karasiq.bittorrent.format.TorrentPiece
+
 object PeerPiecePublisher {
   def props(peerDispatcher: ActorRef, request: PieceDownloadRequest): Props = {
-    Props(classOf[PeerPiecePublisher], peerDispatcher, request)
+    Props(new PeerPiecePublisher(peerDispatcher, request))
   }
 }
 
@@ -40,14 +41,14 @@ class PeerPiecePublisher(peerDispatcher: ActorRef, request: PieceDownloadRequest
 
   override def receive: Receive = {
     case PieceDownloadRequest(TorrentPiece(index, _, _, _)) if this.piece.isEmpty ⇒
-      log.info("Requesting piece #{}", index)
+      log.debug("Requesting piece #{}", index)
       TorrentSource.pieceBlocks(peerDispatcher, index, request.piece, blockSize)
         .map(data ⇒ DownloadedPiece(index, data))
         .runWith(Sink.actorRef(self, Success(null)))
 
     case piece @ DownloadedPiece(index, data) if this.piece.isEmpty ⇒
       if (checkHash(data, request.piece.sha1)) {
-        log.info("Piece finished #{}", index)
+        log.debug("Piece finished #{}", index)
         peerDispatcher ! piece
         this.piece = Some(piece)
         publish()

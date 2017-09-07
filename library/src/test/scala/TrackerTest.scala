@@ -44,7 +44,7 @@ class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
     val piece = {
       val response = Source.single(torrent)
         .via(TorrentSource.dispatcher(torrentManager))
-        .flatMapConcat(r ⇒ TorrentSource.torrent(r.actorRef, r.torrent))
+        .flatMapConcat(dsp ⇒ TorrentSource.torrent(dsp.actorRef, dsp.torrent))
         .runWith(Sink.head)
       Await.result(response, Duration.Inf)
     }

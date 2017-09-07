@@ -3,44 +3,52 @@ package com.karasiq.bittorrent.streams
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
+import akka.NotUsed
 import akka.actor.ActorRef
 import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Source}
 import akka.util.{ByteString, Timeout}
 
 import com.karasiq.bittorrent.dispatcher._
+import com.karasiq.bittorrent.dispatcher.TorrentManager.{CreateDispatcher, PeerDispatcherData}
 import com.karasiq.bittorrent.format.{Torrent, TorrentPiece}
 import com.karasiq.bittorrent.protocol.PeerMessages.PieceBlockRequest
 
 object TorrentSource {
-  private[streams] def pieceBlocks(peerDispatcher: ActorRef, index: Int, piece: TorrentPiece, blockSize: Int): Source[ByteString, _] = {
-    val blocks = TorrentPiece.blocks(piece, blockSize).toVector
+  private[bittorrent] val PieceParallelism = 3
+  private[this] implicit val AskTimeout: Timeout = 10 seconds
+
+  def pieces(dispatcher: ActorRef, pcs: Seq[TorrentPiece]): Source[DownloadedPiece, NotUsed] = {
+    Source(pcs.toList)
+      .flatMapMerge(PieceParallelism, pieceSource(dispatcher, _))
+      .named("torrentPieces")
+  }
+
+  def torrent(dispatcher: ActorRef, torrent: Torrent): Source[DownloadedPiece, NotUsed] = {
+    pieces(dispatcher, TorrentPiece.pieces(torrent.content))
+  }
+
+  def dispatcher(torrentManager: ActorRef): Flow[Torrent, PeerDispatcherData, NotUsed] = {
+    Flow[Torrent]
+      .mapAsync(1)(torrent ⇒ (torrentManager ? CreateDispatcher(torrent)).mapTo[PeerDispatcherData])
+      .named("createPeerDispatcher")
+  }
+
+  private[streams] def pieceBlocks(peerDispatcher: ActorRef, index: Int, piece: TorrentPiece, blockSize: Int): Source[ByteString, NotUsed] = {
+    val blocks = TorrentPiece.blocks(piece, blockSize).toList
     val size = blocks.map(_.size).sum
     Source
       .actorPublisher[DownloadedBlock](PeerBlockPublisher.props(peerDispatcher, size))
-      .mapMaterializedValue(loader ⇒ blocks.foreach(block ⇒ loader ! PieceBlockRequest(index, block.offset, block.size)))
       .take(blocks.length)
       .fold(ByteString.empty)((bs, block) ⇒ bs ++ block.data)
+      .mapMaterializedValue(loader ⇒ blocks.foreach(block ⇒ loader ! PieceBlockRequest(index, block.offset, block.size)))
+      .mapMaterializedValue(_ ⇒ NotUsed)
+      .named("torrentPieceBlocks")
   }
 
-  private def pieceSource(dispatcher: ActorRef, piece: TorrentPiece): Source[DownloadedPiece, ActorRef] = {
+  private[streams] def pieceSource(dispatcher: ActorRef, piece: TorrentPiece): Source[DownloadedPiece, ActorRef] = {
     Source
       .actorPublisher[DownloadedPiece](PeerPiecePublisher.props(dispatcher, PieceDownloadRequest(piece)))
-  }
-
-  def pieces(dispatcher: ActorRef, pcs: Vector[TorrentPiece]): Source[DownloadedPiece, akka.NotUsed] = {
-    Source(pcs)
-      .flatMapMerge(3, { piece ⇒ pieceSource(dispatcher, piece) })
-  }
-
-  def torrent(dispatcher: ActorRef, torrent: Torrent): Source[DownloadedPiece, akka.NotUsed] = {
-    pieces(dispatcher, TorrentPiece.pieces(torrent.content).toVector)
-  }
-
-  def dispatcher(torrentManager: ActorRef): Flow[Torrent, PeerDispatcherData, akka.NotUsed] = {
-    implicit val timeout = Timeout(10 seconds)
-    Flow[Torrent]
-      .mapAsync(1)(torrent ⇒ (torrentManager ? CreateDispatcher(torrent)).mapTo[PeerDispatcherData])
-      .initialTimeout(10 seconds)
+      .named("torrentPiece")
   }
 }

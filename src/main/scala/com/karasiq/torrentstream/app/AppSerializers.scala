@@ -23,23 +23,24 @@ private[app] object AppSerializers {
   trait Picklers {
     implicit val byteStringPickler: Pickler[ByteString] = new Pickler[ByteString] {
       override def pickle(obj: ByteString)(implicit state: PickleState): Unit = {
-        state.pickle(obj.toArray)
+        state.enc.writeByteArray(obj.toArray)
       }
 
       override def unpickle(implicit state: UnpickleState): ByteString = {
-        ByteString(state.unpickle[Array[Byte]])
+        val byteArray = state.dec.readByteArray()
+        ByteString(byteArray)
       }
     }
 
     implicit val instantPickler: Pickler[Instant] = new Pickler[Instant] {
       override def pickle(obj: Instant)(implicit state: PickleState): Unit = {
-        state.pickle[Long](obj.getEpochSecond)
-        state.pickle[Int](obj.getNano)
+        state.enc.writeLong(obj.getEpochSecond)
+        state.enc.writeInt(obj.getNano)
       }
 
       override def unpickle(implicit state: UnpickleState): Instant = {
-        val second = state.unpickle[Long]
-        val nano = state.unpickle[Int]
+        val second = state.dec.readLong
+        val nano = state.dec.readInt
         Instant.ofEpochSecond(second, nano)
       }
     }

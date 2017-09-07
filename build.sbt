@@ -54,8 +54,7 @@ lazy val backendSettings = Seq(
   name := "torrentstream",
   libraryDependencies ++= Seq(
     "com.github.karasiq" %% "mapdbutils" % "1.1.1",
-    "org.mapdb" % "mapdb" % "2.0-beta13",
-    "me.chrons" %% "boopickle" % "1.2.5"
+    "org.mapdb" % "mapdb" % "2.0-beta13"
   ),
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main"),
   scalaJsBundlerCompile in Compile <<= (scalaJsBundlerCompile in Compile).dependsOn(fullOptJS in Compile in frontend),
@@ -98,8 +97,7 @@ lazy val frontendSettings = Seq(
   persistLauncher in Compile := true,
   name := "torrentstream-frontend",
   libraryDependencies ++= Seq(
-    "com.github.karasiq" %%% "scalajs-bootstrap" % "1.0.2",
-    "me.chrons" %%% "boopickle" % "1.1.2"
+    "com.github.karasiq" %%% "scalajs-bootstrap" % "1.0.2"
   )
 )
 
@@ -107,10 +105,20 @@ lazy val library = Project("bittorrent", file("library"))
   .settings(commonSettings, librarySettings, publishSettings)
 
 lazy val backend = Project("torrentstream", file("."))
-  .dependsOn(library)
+  .dependsOn(library, sharedJVM)
   .settings(commonSettings, backendSettings)
   .enablePlugins(ScalaJSBundlerPlugin, JavaAppPackaging)
 
 lazy val frontend = Project("torrentstream-frontend", file("frontend"))
   .settings(commonSettings, frontendSettings)
+  .dependsOn(sharedJS)
   .enablePlugins(ScalaJSPlugin)
+
+lazy val shared = crossProject.crossType(CrossType.Pure)
+  .settings(commonSettings, name := "torrentstream-shared")
+  .jvmSettings(libraryDependencies += "me.chrons" %% "boopickle" % "1.2.5")
+  .jsSettings(libraryDependencies += "me.chrons" %%% "boopickle" % "1.2.5")
+
+lazy val sharedJS = shared.js
+
+lazy val sharedJVM = shared.jvm

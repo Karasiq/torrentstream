@@ -1,13 +1,10 @@
 package com.karasiq.torrentstream.app
 
 import com.karasiq.bittorrent.format.Torrent
+import com.karasiq.torrentstream.shared.TorrentInfo
 
-private[app] case class TorrentInfo(announceList: Seq[Seq[String]], comment: String,
-                                    createdBy: String, files: Seq[(String, Long)],
-                                    infoHash: String, name: String, size: Long)
-
-private[app] object TorrentInfo {
-  def fromTorrent(torrent: Torrent): TorrentInfo = {
+object TorrentUtils {
+  def toTorrentInfo(torrent: Torrent): TorrentInfo = {
     TorrentInfo(
       if (torrent.announceList.nonEmpty) torrent.announceList else Vector(Vector(torrent.announce)),
       torrent.comment.getOrElse(""),

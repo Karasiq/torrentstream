@@ -1,17 +1,19 @@
 package com.karasiq.torrentstream.frontend.components
 
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.util.{Failure, Success}
+import scalatags.JsDom.all._
+
+import rx._
+
+import com.karasiq.bootstrap.{Bootstrap, BootstrapComponent}
 import com.karasiq.bootstrap.BootstrapImplicits._
 import com.karasiq.bootstrap.buttons.{Button, ButtonGroup, ButtonGroupSize, ButtonStyle}
 import com.karasiq.bootstrap.grid.GridSystem
 import com.karasiq.bootstrap.icons.FontAwesome
 import com.karasiq.bootstrap.table.{PagedTable, TableRow}
-import com.karasiq.bootstrap.{Bootstrap, BootstrapComponent}
-import com.karasiq.torrentstream.frontend.{TorrentInfo, TorrentStreamApi}
-import rx._
-
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-import scala.util.{Failure, Success}
-import scalatags.JsDom.all._
+import com.karasiq.torrentstream.frontend.TorrentStreamApi
+import com.karasiq.torrentstream.shared.TorrentInfo
 
 final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ctx.Owner) extends BootstrapComponent {
   private val table = new PagedTable {
@@ -30,7 +32,7 @@ final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ct
       }
     }
 
-    val torrentInfo = Var(Vector.empty[TorrentInfo])
+    val torrentInfo = Var(Seq.empty[TorrentInfo])
 
     currentPage.foreach(_ ⇒ update())
 
@@ -68,19 +70,19 @@ final class TorrentTable(panel: TorrentInfoPanel, perPage: Int)(implicit ctx: Ct
     def update(): Unit = {
       val offset = (currentPage.now - 1) * perPage
       TorrentStreamApi.info(offset, perPage).onComplete {
-        case Success(ts) ⇒
-          torrentInfo.update(ts)
+        case Success(result) ⇒
+          torrentInfo() = result
 
         case Failure(_) ⇒
-          torrentInfo.update(Vector.empty)
+          torrentInfo() = Nil
       }
 
       TorrentStreamApi.uploaded().onComplete {
-        case Success(ts) ⇒
-          torrentsCount.update(ts)
+        case Success(result) ⇒
+          torrentsCount() = result
 
         case Failure(_) ⇒
-          torrentsCount.update(0)
+          torrentsCount() = 0
       }
     }
   }

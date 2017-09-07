@@ -41,7 +41,7 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
           }
         } ~
         parameters('offset.as[Int], 'count.as[Int]) { (offset, count) ⇒
-          complete(store.infoIterator.slice(offset, offset + count).toVector)
+          complete(store.infoIterator.slice(offset, offset + count).toList)
         } ~
         complete(store.size) // Torrent count
       } ~
@@ -72,12 +72,12 @@ private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
         Torrent.tryDecode(data) match {
           case Some(torrent) ⇒
             if (store.contains(torrent.infoHash)) {
-              complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
+              complete(StatusCodes.OK, TorrentUtils.toTorrentInfo(torrent))
             } else {
               extractLog { log ⇒
                 store += torrent.infoHash → torrent
                 log.info(s"Torrent uploaded: {} {}", torrent.content.name, torrent.infoHashString)
-                complete(StatusCodes.OK, TorrentInfo.fromTorrent(torrent))
+                complete(StatusCodes.OK, TorrentUtils.toTorrentInfo(torrent))
               }
             }
 

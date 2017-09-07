@@ -34,15 +34,20 @@ object PeerDispatcher {
     bs ++ Array.fill(20 - bs.length)(PeerIdCharset(Random.nextInt(PeerIdCharset.length)))
   }
 
-  sealed trait PeerDispatcherCommand
-  case class ConnectPeer(address: InetSocketAddress) extends PeerDispatcherCommand
-  case object RequestDispatcherData extends PeerDispatcherCommand
+  sealed trait Message
+  case class ConnectPeer(address: InetSocketAddress) extends Message
+  case object RequestDispatcherData extends Message
   case class DispatcherData(data: SeedData)
-  case class UpdateBitField(completed: BitSet) extends PeerDispatcherCommand
+  case class UpdateBitField(completed: BitSet) extends Message
 
-  private[dispatcher] final class PeerDispatcherContext(val peers: Map[ActorRef, PeerData]) extends AnyVal
+  private[dispatcher] final case class PeerDispatcherContext(peers: Map[ActorRef, PeerData]) extends AnyVal
 }
 
+/**
+  * Torrent peers dispatcher
+  * @param torrent Torrent metadata
+  * @todo DHT, UDP trackers
+  */
 class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash {
   final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
   import context.{dispatcher, system}
@@ -60,7 +65,9 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     val peerId = PeerDispatcher.generatePeerId(dispatcherConfig.getString("peer-id-prefix"))
 
     private[this] val connectionConfig = rootConfig.getConfig("peer-connection")
-    val downloadQueueSize = connectionConfig.getInt("download-queue-size")
+    val downloadQueueMin = connectionConfig.getInt("download-queue-min")
+    val downloadQueueMax = connectionConfig.getInt("download-queue-max")
+    val downloadQueueFactor = connectionConfig.getDouble("download-queue-factor")
   }
 
   private[this] object state {
@@ -69,7 +76,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     var peers = Map.empty[ActorRef, PeerData]
     var pieces = List.empty[DownloadedPiece]
 
-    val queue = new PeerDownloadQueue(settings.blockSize, settings.downloadQueueSize)
+    val queue = PeerDownloadQueue(settings.blockSize, settings.downloadQueueMin, settings.downloadQueueMax, settings.downloadQueueFactor)
   }
 
   @throws[Exception](classOf[Exception])
@@ -107,7 +114,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     case piece @ DownloadedPiece(pieceIndex, _) ⇒
       val newCompleted = if (state.pieces.length > settings.bufferSize) {
         val (drop, keep) = state.pieces.splitAt(1)
-        log.debug("Piece unbuffered: #{}", drop.head.pieceIndex)
+        // log.debug("Piece unbuffered: #{}", drop.head.pieceIndex)
         state.pieces = keep :+ piece
         state.ownData.completed + pieceIndex -- drop.map(_.pieceIndex)
       } else {
@@ -115,7 +122,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
         state.ownData.completed + pieceIndex
       }
       state.ownData = state.ownData.copy(completed = newCompleted)
-      log.debug("Piece buffered: #{}", pieceIndex)
+      // log.debug("Piece buffered: #{}", pieceIndex)
       state.peers.keys.foreach(_ ! UpdateBitField(newCompleted))
 
     case request @ PieceBlockRequest(index, offset, length) ⇒
@@ -132,7 +139,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
           sender() ! block
 
         case _ ⇒
-          log.debug("Downloading block: {}/{}/{}", index, offset, length)
+          // log.debug("Downloading block: {}/{}/{}", index, offset, length)
           state.queue.download(request)
       }
 
@@ -254,6 +261,6 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   }
 
   private[this] implicit def implicitDispatcherContext: PeerDispatcherContext = {
-    new PeerDispatcherContext(state.peers)
+    PeerDispatcherContext(state.peers)
   }
 }
