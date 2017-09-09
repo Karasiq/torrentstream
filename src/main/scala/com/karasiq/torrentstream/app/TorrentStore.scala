@@ -17,7 +17,9 @@ import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.mapdb.{MapDbSingleFileProducer, MapDbWrapper}
 import com.karasiq.torrentstream.shared.TorrentInfo
 
-final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent] with Closeable with AppSerializers.Picklers {
+final class TorrentStore(config: Config) extends mutable.Map[ByteString, Torrent] with Closeable {
+  import AppSerializers.Picklers._ 
+  
   private object DbProvider extends MapDbSingleFileProducer(Paths.get(config.getString("karasiq.torrentstream.store.path"))) {
     override protected def setSettings(dbMaker: Maker): Maker = {
       dbMaker

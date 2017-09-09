@@ -17,8 +17,9 @@ import com.karasiq.torrentstream.TorrentStream
 import com.karasiq.torrentstream.app.AppSerializers.StringConversions
 
 private[app] class AppHandler(torrentManager: ActorRef, store: TorrentStore)
-                             (implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer)
-  extends AppSerializers.Marshallers {
+                             (implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) {
+
+  import AppSerializers.Marshallers._
 
   // -----------------------------------------------------------------------
   // Config

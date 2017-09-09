@@ -14,13 +14,13 @@ private[app] object AppSerializers {
     }
   }
 
-  trait Marshallers {
+  object Marshallers {
     implicit def binaryMarshaller[A, B](implicit ev: Pickler[A], m: Marshaller[ByteString, B]): Marshaller[A, B] = {
       Marshaller(implicit ec ⇒ value ⇒ m(ByteString(Pickle.intoBytes(value))))
     }
   }
 
-  trait Picklers {
+  object Picklers {
     implicit val byteStringPickler: Pickler[ByteString] = new Pickler[ByteString] {
       override def pickle(obj: ByteString)(implicit state: PickleState): Unit = {
         state.enc.writeByteArray(obj.toArray)
