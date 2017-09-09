@@ -52,7 +52,7 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
   import context.{dispatcher, system}
 
-  private[this] val announcer = context.actorOf(Props[HttpTracker])
+  private[this] val announcer = context.actorOf(HttpTracker.props)
 
   private[this] object settings {
     private[this] val rootConfig = context.system.settings.config.getConfig("karasiq.bittorrent")

@@ -45,7 +45,8 @@ lazy val librarySettings = Seq(
       "commons-io" % "commons-io" % "2.5",
       "org.parboiled" %% "parboiled" % "2.1.4",
       "org.bouncycastle" % "bcprov-jdk15on" % "1.58",
-      "org.scalatest" %% "scalatest" % "3.0.4" % "test"
+      "org.scalatest" %% "scalatest" % "3.0.4" % "test",
+      "com.github.karasiq" %% "proxyutils" % "2.0.10"
     )
   }
 )
