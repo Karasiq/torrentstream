@@ -18,7 +18,7 @@ import com.karasiq.bittorrent.streams.TorrentSource
 class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
   implicit val actorSystem = ActorSystem("torrent-tracker-test")
   implicit val materializer = ActorMaterializer()
-  val tracker = actorSystem.actorOf(Props[HttpTracker])
+  val tracker = actorSystem.actorOf(HttpTracker.props, "httpTracker")
 
   override protected def afterAll(): Unit = {
     actorSystem.terminate()
