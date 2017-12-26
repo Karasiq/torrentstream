@@ -2,7 +2,7 @@ import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
-import akka.actor.{ActorSystem, Props}
+import akka.actor.ActorSystem
 import akka.pattern.ask
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
@@ -40,7 +40,7 @@ class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
   }
 
   "Torrent pieces" should "be downloaded" in {
-    val torrentManager = actorSystem.actorOf(Props[TorrentManager], "torrentManager")
+    val torrentManager = actorSystem.actorOf(TorrentManager.props, "torrentManager")
     val piece = {
       val response = Source.single(torrent)
         .via(TorrentSource.dispatcher(torrentManager))

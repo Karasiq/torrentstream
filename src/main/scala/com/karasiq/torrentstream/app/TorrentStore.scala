@@ -8,13 +8,21 @@ import scala.collection.JavaConverters._
 import scala.language.implicitConversions
 
 import akka.util.ByteString
-import boopickle.Default._
 import com.typesafe.config.{Config, ConfigFactory}
 import io.getquill.{H2JdbcContext, SnakeCase}
 
 import com.karasiq.bittorrent.format.Torrent
+import com.karasiq.torrentstream.shared.TorrentInfo
 
-trait TorrentStore extends mutable.Map[ByteString, Torrent] with Closeable
+trait TorrentStore extends mutable.Map[ByteString, Torrent] with Closeable {
+  def info(key: ByteString): TorrentInfo = {
+    TorrentUtils.toTorrentInfo(apply(key))
+  }
+
+  def infoIterator: Iterator[TorrentInfo] = {
+    iterator.map(v ⇒ TorrentUtils.toTorrentInfo(v._2))
+  }
+}
 
 object TorrentStore {
   def apply(config: Config): TorrentStore = {
@@ -23,8 +31,9 @@ object TorrentStore {
 }
 
 final class H2TorrentStore(config: Config) extends TorrentStore {
-  private[this] val context: H2JdbcContext[SnakeCase] = new H2JdbcContext[SnakeCase](createH2Config())
-  import context._
+  private[this] val dbConfig: Config = createH2Config()
+  private[this] val context = new H2JdbcContext[SnakeCase](dbConfig)
+  import context.{lift ⇒ liftQ, _}
 
   private[this] def createH2Config(): Config = {
     val path = config.getString("path")
@@ -38,6 +47,8 @@ final class H2TorrentStore(config: Config) extends TorrentStore {
   }
 
   private[this] object Model {
+    import boopickle.Default._
+
     import AppSerializers.Picklers._
     implicit val encodeByteString = MappedEncoding[ByteString, Array[Byte]](_.toArray)
     implicit val decodeByteString = MappedEncoding[Array[Byte], ByteString](ByteString.fromArray)
@@ -45,39 +56,35 @@ final class H2TorrentStore(config: Config) extends TorrentStore {
     implicit val decodeTorrent = MappedEncoding[Array[Byte], Torrent](bs ⇒ Unpickle[Torrent].fromBytes(ByteBuffer.wrap(bs)))
 
     final case class DBTorrent(infoHash: ByteString, timestamp: Long, data: Torrent)
-    object DBTorrent {
-      implicit def toTorrent(dt: DBTorrent): Torrent = dt.data
-    }
-    
     implicit val torrentsSchemaMeta = schemaMeta[DBTorrent]("torrents")
-}
+  }
 
   import Model._
 
-  def +=(kv: (ByteString, Torrent)) = {
+  def +=(kv: (ByteString, Torrent)): this.type = {
     val timestamp = System.currentTimeMillis()
-    val q = quote(query[DBTorrent].insert(lift(DBTorrent(kv._1, timestamp, kv._2))))
+    val q = quote(query[DBTorrent].insert(liftQ(DBTorrent(kv._1, timestamp, kv._2))))
     context.run(q)
     this
   }
 
-  def -=(key: ByteString) = {
-    val q = quote(query[DBTorrent].filter(_.infoHash == lift(key)).delete)
+  def -=(key: ByteString): this.type = {
+    val q = quote(query[DBTorrent].filter(_.infoHash == liftQ(key)).delete)
     context.run(q)
     this
   }
 
-  def get(key: ByteString) = {
-    val q = quote(query[DBTorrent].filter(_.infoHash == lift(key))).map(_.data)
+  def get(key: ByteString): Option[Torrent] = {
+    val q = quote(query[DBTorrent].filter(_.infoHash == liftQ(key)).map(_.data))
     context.run(q).headOption
   }
 
-  def iterator = {
-    val q = quote(query[DBTorrent]).sortBy(_.timestamp)(Ord.desc).map(_.data)
+  def iterator: Iterator[(ByteString, Torrent)] = {
+    val q = quote(query[DBTorrent].sortBy(_.timestamp)(Ord.desc).map(dt ⇒ (dt.infoHash, dt.data)))
     context.run(q).iterator
   }
 
-  def close() = {
+  def close(): Unit = {
     context.close()
   }
 }

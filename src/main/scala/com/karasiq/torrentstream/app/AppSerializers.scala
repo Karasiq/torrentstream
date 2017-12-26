@@ -46,37 +46,3 @@ private[app] object AppSerializers {
     }
   }
 }
-
-private object MapDbBpSerializer {
-  import java.io.{DataInput, DataOutput}
-  import java.nio.ByteBuffer
-
-  import org.mapdb.{DataIO, Serializer}
-
-  def apply[T: Pickler]: Serializer[T] = new Serializer[T] {
-    override def serialize(out: DataOutput, value: T): Unit = {
-      val data = Pickle[T](value).toByteBuffer
-      DataIO.packInt(out, data.remaining())
-      out.write(data.array())
-    }
-
-    override def deserialize(in: DataInput, available: Int): T = {
-      val length = DataIO.unpackInt(in)
-      val array = new Array[Byte](length)
-      in.readFully(array)
-      Unpickle[T].fromBytes(ByteBuffer.wrap(array))
-    }
-  }
-
-  val BYTE_STRING = new Serializer[ByteString] {
-    private val arraySerializer = Serializer.BYTE_ARRAY
-
-    override def serialize(out: DataOutput, value: ByteString): Unit = {
-      arraySerializer.serialize(out, value.toArray)
-    }
-
-    override def deserialize(in: DataInput, available: Int): ByteString = {
-      ByteString(arraySerializer.deserialize(in, available))
-    }
-  }
-}
