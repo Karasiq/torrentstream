@@ -1,20 +1,20 @@
 package com.karasiq.torrentstream.app
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
-import akka.stream.ActorMaterializer
-import com.karasiq.bittorrent.dispatcher.TorrentManager
-import com.typesafe.config.ConfigFactory
-
 import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.language.postfixOps
+
+import akka.actor.ActorSystem
+import akka.http.scaladsl.Http
+import akka.stream.ActorMaterializer
+
+import com.karasiq.bittorrent.dispatcher.TorrentManager
 
 object Main extends App {
   implicit val actorSystem = ActorSystem("torrent-stream")
   implicit val materializer = ActorMaterializer()
 
-  val store = new TorrentStore(ConfigFactory.load())
+  val store = TorrentStore(actorSystem.settings.config.getConfig("karasiq.torrentstream.store"))
 
   Runtime.getRuntime.addShutdownHook(new Thread(new Runnable {
     override def run(): Unit = {
@@ -24,7 +24,7 @@ object Main extends App {
     }
   }))
 
-  val torrentManager = actorSystem.actorOf(TorrentManager.props)
+  val torrentManager = actorSystem.actorOf(TorrentManager.props, "torrentManager")
   val handler = new AppHandler(torrentManager, store)
   val config = actorSystem.settings.config.getConfig("karasiq.torrentstream.http-server")
   val host = config.getString("host")

@@ -54,8 +54,8 @@ lazy val librarySettings = Seq(
 lazy val backendSettings = Seq(
   name := "torrentstream",
   libraryDependencies ++= Seq(
-    "com.github.karasiq" %% "mapdbutils" % "1.1.1",
-    "org.mapdb" % "mapdb" % "2.0-beta13"
+    "com.h2database" % "h2" % "1.4.192",
+    "io.getquill" %% "quill-jdbc" % "1.2.1"
   ),
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main"),
   scalaJsBundlerCompile in Compile <<= (scalaJsBundlerCompile in Compile).dependsOn(fullOptJS in Compile in frontend),
