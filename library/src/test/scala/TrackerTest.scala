@@ -7,7 +7,6 @@ import akka.pattern.ask
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.{ByteString, Timeout}
-import org.apache.commons.io.IOUtils
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Matchers}
 
 import com.karasiq.bittorrent.announce.{HttpTracker, TrackerRequest, TrackerResponse}
@@ -26,7 +25,7 @@ class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
   }
 
   implicit val timeout = Timeout(10 minutes)
-  val torrent = Torrent(ByteString(IOUtils.toByteArray(getClass.getResource("ubuntu-15.10-desktop-amd64.iso.torrent"))))
+  val torrent = Torrent(TestResources.testTorrent())
 
   "Torrent tracker" should "provide peers" in {
     val id = ByteString(Array.fill(20)('A'.toByte))
