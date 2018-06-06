@@ -1,14 +1,12 @@
 package com.karasiq.bittorrent.announce
 
-import java.net.{InetAddress, InetSocketAddress}
+import java.net.InetSocketAddress
 
 import akka.util.ByteString
-import com.karasiq.bittorrent.format.BEncodeImplicits._
-import com.karasiq.bittorrent.format._
-import com.karasiq.bittorrent.protocol.BitTorrentTcpProtocol
 
-import scala.annotation.tailrec
-import scala.collection.mutable.ArrayBuffer
+import com.karasiq.bittorrent.dht.DHTMessages
+import com.karasiq.bittorrent.format._
+import com.karasiq.bittorrent.format.BEncodeImplicits._
 
 case class TrackerPeer(peerId: Option[String], address: InetSocketAddress)
 
@@ -30,20 +28,8 @@ object TrackerResponse {
       }.flatten
 
     case s: BEncodedString ⇒ // Compact
-      def readPort(bytes: ByteString): Int = {
-        require(bytes.length == 2)
-        BitTorrentTcpProtocol.int32FromBytes(bytes)
-      }
-
-      @tailrec
-      def parsePeerString(peers: ArrayBuffer[TrackerPeer], ps: ByteString): Seq[TrackerPeer] = {
-        if (ps.isEmpty) peers.result() else {
-          val address = new InetSocketAddress(InetAddress.getByAddress(ps.take(4).toArray), readPort(ps.drop(4).take(2)))
-          parsePeerString(peers :+ TrackerPeer(None, address), ps.drop(6))
-        }
-      }
-      val bytes = s.asByteString
-      parsePeerString(new ArrayBuffer[TrackerPeer](bytes.length / 6), bytes)
+      DHTMessages.PeerAddress.parseList(s.asByteString)
+        .map(pa ⇒ TrackerPeer(None, pa.address))
   }
 
   def fromBytes(str: ByteString): Either[TrackerError, TrackerResponse] = {

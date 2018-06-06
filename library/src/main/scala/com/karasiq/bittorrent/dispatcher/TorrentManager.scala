@@ -13,6 +13,8 @@ import akka.stream.scaladsl._
 import akka.stream.scaladsl.Tcp._
 import akka.util.{ByteString, Timeout}
 
+import com.karasiq.bittorrent.announce.HttpAnnouncer
+import com.karasiq.bittorrent.dht.DHTRoutingTable
 import com.karasiq.bittorrent.dispatcher.PeerDispatcher.{DispatcherData, RequestDispatcherData}
 import com.karasiq.bittorrent.dispatcher.TorrentManager.{CreateDispatcher, PeerDispatcherData, RequestDispatcher}
 import com.karasiq.bittorrent.format.Torrent
@@ -59,6 +61,9 @@ object TorrentManager {
 class TorrentManager extends Actor with ActorLogging {
   private[this] implicit val executionContext = context.dispatcher
   private[this] implicit val askTimeout = Timeout(10 seconds)
+
+  private[this] val dhtRoutingTable = context.actorOf(DHTRoutingTable.props, "dhtRoutingTable")
+  private[this] val httpAnnouncer = context.actorOf(HttpAnnouncer.props, "httpAnnouncer")
   private[this] val dispatchers = mutable.AnyRefMap.empty[ByteString, (Torrent, ActorRef)]
 
   //noinspection VariablePatternShadow
@@ -70,7 +75,7 @@ class TorrentManager extends Actor with ActorLogging {
           dispatcher
 
         case None ⇒
-          val dispatcher = context.actorOf(PeerDispatcher.props(torrent))
+          val dispatcher = context.actorOf(PeerDispatcher.props(dhtRoutingTable, httpAnnouncer, torrent))
           context.watch(dispatcher)
           dispatchers += torrent.infoHash → (torrent, dispatcher)
           dispatcher

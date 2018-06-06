@@ -20,13 +20,13 @@ import com.karasiq.networkutils.proxy.Proxy
 import com.karasiq.networkutils.uri._
 import com.karasiq.proxy.ProxyChain
 
-object HttpTracker {
+object HttpAnnouncer {
   def props: Props = {
-    Props(new HttpTracker)
+    Props(new HttpAnnouncer)
   }
 }
 
-private final class HttpTracker extends Actor with ActorLogging {
+private final class HttpAnnouncer extends Actor with ActorLogging {
   import context.dispatcher
   private[this] implicit val materializer: Materializer = ActorMaterializer(ActorMaterializerSettings(context.system))
   private[this] val http = Http(context.system)

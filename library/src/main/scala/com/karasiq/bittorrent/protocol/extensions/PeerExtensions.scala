@@ -12,11 +12,12 @@ case class ExtensionBit(index: Int, mask: Byte) {
   }
 }
 
-case class PeerExtensions(fast: Boolean = true, extensionProtocol: Boolean = true) {
+case class PeerExtensions(dht: Boolean = true, fast: Boolean = true, extensionProtocol: Boolean = true) {
   import PeerExtensions.{Bits, BitSetBytes}
 
   def toByteArray: Array[Byte] = {
     val byteArray = new Array[Byte](BitSetBytes)
+    if (dht) Bits.dht.set(byteArray)
     if (fast) Bits.fast.set(byteArray)
     if (extensionProtocol) Bits.extensionProtocol.set(byteArray)
     byteArray
@@ -40,6 +41,7 @@ object PeerExtensions {
   private[extensions] val BitSetBytes = 8
 
   private[extensions] object Bits {
+    val dht = ExtensionBit(7, 0x01)
     val fast = ExtensionBit(7, 0x04)
     val extensionProtocol = ExtensionBit(5, 0x10)
   }
@@ -49,6 +51,7 @@ object PeerExtensions {
   def fromByteArray(bytes: Array[Byte]): PeerExtensions = {
     assert(bytes.length == BitSetBytes, "Invalid extensions bit set")
     PeerExtensions(
+      Bits.dht.test(bytes),
       Bits.fast.test(bytes),
       Bits.extensionProtocol.test(bytes)
     )

@@ -9,14 +9,14 @@ class BEncodeTest extends FlatSpec with Matchers  {
   val torrent = Torrent(TestResources.testTorrent())
   
   "BEncode parser" should "parse torrent file" in {
-    Hex.encodeHexString(torrent.infoHash.toArray).toUpperCase shouldBe "1488D454915D860529903B61ADB537012A0FE7C8"
+    Hex.encodeHexString(torrent.infoHash.toArray).toUpperCase shouldBe "DDEE5CB75C12F3165EF79A12A5CD6158BEF029AD"
     torrent.announce shouldBe "http://torrent.ubuntu.com:6969/announce"
     torrent.announceList shouldBe Vector(Vector("http://torrent.ubuntu.com:6969/announce"), Vector("http://ipv6.torrent.ubuntu.com:6969/announce"))
     torrent.comment shouldBe Some("Ubuntu CD releases.ubuntu.com")
-    torrent.date shouldBe Some(Instant.parse("2017-08-03T13:14:57Z"))
+    torrent.date shouldBe Some(Instant.parse("2018-04-26T20:59:50Z"))
     torrent.content.pieceSize shouldBe 524288L
-    torrent.content.pieces.length shouldBe 60580
-    torrent.content.files.headOption shouldBe Some(TorrentFile("ubuntu-16.04.3-desktop-amd64.iso", 1587609600L))
+    torrent.content.pieces.length shouldBe 32240
+    torrent.content.files.headOption shouldBe Some(TorrentFile("ubuntu-18.04-live-server-amd64.iso", 845152256L))
   }
 
   "Torrent pieces" should "be constructed" in {

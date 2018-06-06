@@ -19,7 +19,7 @@ import com.karasiq.bittorrent.dispatcher.MessageConversions._
 import com.karasiq.bittorrent.dispatcher.PeerConnection._
 import com.karasiq.bittorrent.dispatcher.PeerConnection.PeerConnectionContext.{HandshakeContext, PeerContext, QueuedDownload, QueuedUpload}
 import com.karasiq.bittorrent.dispatcher.PeerConnection.PeerConnectionState.{Downloading, Idle}
-import com.karasiq.bittorrent.dispatcher.PeerDispatcher.{ConnectPeer, UpdateBitField}
+import com.karasiq.bittorrent.dispatcher.PeerDispatcher.{ConnectDHTPeer, ConnectPeer, UpdateBitField}
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.protocol.{PeerConnectionStage, PeerMessageId, TcpMessageWriter}
 import com.karasiq.bittorrent.protocol.PeerMessages._
@@ -218,6 +218,12 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent,
 
     case Event(AllowedMsg(PieceIndex(piece)), ctx: PeerContext) if ctx.peerData.extensions.fast ⇒
       log.debug("Allowed piece: {}", piece)
+      stay()
+
+    // DHT
+    case Event(PortMsg(Port(dhtPort)), ctx: PeerContext) if ctx.peerData.extensions.dht ⇒
+      log.debug("DHT port received: {}", dhtPort)
+      peerDispatcher ! ConnectDHTPeer(new InetSocketAddress(ctx.peerData.address.getAddress, dhtPort))
       stay()
 
     // Extension protocol

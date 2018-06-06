@@ -1,9 +1,10 @@
 package com.karasiq.bittorrent.protocol
 
-import akka.util.ByteString
-import com.karasiq.bittorrent.protocol.extensions.{ExtensionProtocol, PeerExchange}
-
 import scala.language.implicitConversions
+
+import akka.util.ByteString
+
+import com.karasiq.bittorrent.protocol.extensions.{ExtensionProtocol, PeerExchange}
 
 /**
   * @see [[https://wiki.theory.org/BitTorrentSpecification#Peer_wire_protocol_.28TCP.29]]
@@ -46,6 +47,9 @@ object PeerMessages extends TcpMessageSpecification with BitTorrentMessages with
     object PieceMsg extends PayloadMatcher[PieceBlock](PeerMessageId.PIECE)
     object HaveMsg extends PayloadMatcher[PieceIndex](PeerMessageId.HAVE)
     object BitFieldMsg extends PayloadMatcher[BitField](PeerMessageId.BITFIELD)
+
+    // DHT extension
+    object PortMsg extends PayloadMatcher[Port](PeerMessageId.PORT)
 
     // Fast extension
     object SuggestMsg extends PayloadMatcher[PieceIndex](PeerMessageId.SUGGEST_PIECE)

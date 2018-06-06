@@ -9,7 +9,7 @@ import akka.stream.scaladsl.{Sink, Source}
 import akka.util.{ByteString, Timeout}
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Matchers}
 
-import com.karasiq.bittorrent.announce.{HttpTracker, TrackerRequest, TrackerResponse}
+import com.karasiq.bittorrent.announce.{HttpAnnouncer, TrackerRequest, TrackerResponse}
 import com.karasiq.bittorrent.dispatcher._
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.streams.TorrentSource
@@ -17,7 +17,7 @@ import com.karasiq.bittorrent.streams.TorrentSource
 class TrackerTest extends FlatSpec with Matchers with BeforeAndAfterAll {
   implicit val actorSystem = ActorSystem("torrent-tracker-test")
   implicit val materializer = ActorMaterializer()
-  val tracker = actorSystem.actorOf(HttpTracker.props, "httpTracker")
+  val tracker = actorSystem.actorOf(HttpAnnouncer.props, "httpTracker")
 
   override protected def afterAll(): Unit = {
     actorSystem.terminate()

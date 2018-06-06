@@ -6,16 +6,15 @@ import scala.collection.{mutable, BitSet}
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.{Random, Success}
+import scala.util.Random
 
 import akka.actor._
-import akka.pattern.ask
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings, FlowShape}
 import akka.stream.actor.ActorPublisher
 import akka.stream.scaladsl.{Tcp, _}
-import akka.util.{ByteString, Timeout}
+import akka.util.ByteString
 
-import com.karasiq.bittorrent.announce.{HttpTracker, TrackerError, TrackerRequest, TrackerResponse}
+import com.karasiq.bittorrent.dht.DHTRoutingTable.AddNode
 import com.karasiq.bittorrent.dispatcher.PeerConnection.{PeerConnected, PeerDisconnected, PeerStateChanged}
 import com.karasiq.bittorrent.dispatcher.PeerDispatcher._
 import com.karasiq.bittorrent.format.Torrent
@@ -25,8 +24,8 @@ import com.karasiq.bittorrent.protocol.PeerMessages.{PeerHandshake, PieceBlockRe
 object PeerDispatcher {
   private[this] val PeerIdCharset = ByteString("abcdefghijklmnopqrstuvwxyz" + "1234567890")
 
-  def props(torrent: Torrent): Props = {
-    Props(new PeerDispatcher(torrent))
+  def props(dhtRoutingTable: ActorRef, httpAnnouncer: ActorRef, torrent: Torrent): Props = {
+    Props(new PeerDispatcher(dhtRoutingTable, httpAnnouncer, torrent))
   }
 
   def generatePeerId(prefix: String): ByteString = {
@@ -39,20 +38,24 @@ object PeerDispatcher {
   case object RequestDispatcherData extends Message
   case class DispatcherData(data: SeedData)
   case class UpdateBitField(completed: BitSet) extends Message
+  case class ConnectDHTPeer(address: InetSocketAddress) extends Message
 
   private[dispatcher] final case class PeerDispatcherContext(peers: Map[ActorRef, PeerData]) extends AnyVal
 }
 
 /**
   * Torrent peers dispatcher
+  * @param dhtRoutingTable DHT routing table
+  * @param httpAnnouncer HTTP tracker announcer
   * @param torrent Torrent metadata
   * @todo DHT, UDP trackers
   */
-class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stash {
-  final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
-  import context.{dispatcher, system}
+class PeerDispatcher(dhtRoutingTable: ActorRef,
+                     httpAnnouncer: ActorRef,
+                     torrent: Torrent) extends Actor with ActorLogging with Stash {
 
-  private[this] val announcer = context.actorOf(HttpTracker.props)
+  private[this] final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
+  import context.{dispatcher, system}
 
   private[this] object settings {
     private[this] val rootConfig = context.system.settings.config.getConfig("karasiq.bittorrent")
@@ -70,6 +73,8 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
     val downloadQueueFactor = connectionConfig.getDouble("download-queue-factor")
   }
 
+  private[this] val announcer = context.actorOf(TorrentAnnounceScheduler.props(dhtRoutingTable, httpAnnouncer, torrent, settings.peerId, settings.ownAddress), "announcer")
+
   private[this] object state {
     var ownData = SeedData(settings.peerId, torrent.infoHash)
     val connectionRequests = mutable.Set.empty[InetSocketAddress]
@@ -83,33 +88,11 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
   override def preStart(): Unit = {
     super.preStart()
     schedules.setIdleTimeout()
-    (torrent.announceList.flatten :+ torrent.announce).distinct
-      .filter(url ⇒ url.startsWith("http://") || url.startsWith("https://"))
-      .foreach(url ⇒ self ! TrackerRequest(url, torrent.infoHash, settings.peerId, settings.ownAddress.getPort, 0, 0, 0))
   }
 
   override def receive: Receive = {
-    case trackerRequest: TrackerRequest ⇒
-      implicit val timeout = Timeout(30 seconds)
-      val self = context.self
-      val scheduler = context.system.scheduler
-
-      log.info("Announce request: {}", trackerRequest.announce)
-
-      (announcer ? trackerRequest).onComplete {
-        case Success(TrackerError(error)) ⇒
-          log.error("Tracker error: {}", error)
-          scheduler.scheduleOnce(30 seconds, self, trackerRequest)
-
-        case Success(TrackerResponse(_, interval, minInterval, trackerId, _, _, peerList)) ⇒
-          val next = minInterval.getOrElse(interval).seconds
-          log.info("{} peers received from tracker: {}, next request in {}", peerList.length, trackerRequest.announce, next)
-          scheduler.scheduleOnce(next, self, trackerRequest.copy(trackerId = trackerId))
-          peerList.foreach(peer ⇒ self ! ConnectPeer(peer.address))
-
-        case _ ⇒
-          scheduler.scheduleOnce(30 seconds, self, trackerRequest)
-      }
+    case TorrentAnnounceScheduler.PeersReceived(peers) ⇒
+      peers.foreach(self ! ConnectPeer(_))
 
     case piece @ DownloadedPiece(pieceIndex, _) ⇒
       val newCompleted = if (state.pieces.length > settings.bufferSize) {
@@ -159,6 +142,9 @@ class PeerDispatcher(torrent: Torrent) extends Actor with ActorLogging with Stas
       state.connectionRequests += address
       log.info("Connecting to: {}", address)
       connections.connectTo(address)
+
+    case ConnectDHTPeer(address) ⇒
+      dhtRoutingTable ! AddNode(address)
 
     case PeerConnected(peerData) ⇒
       state.peers += sender() → peerData
