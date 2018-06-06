@@ -71,6 +71,7 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
     case GetAllNodes ⇒
       sender() ! GetAllNodes.Success(nodes)
 
+    // TODO: Buckets that have not been changed in 15 minutes should be "refreshed." This is done by picking a random ID in the range of the bucket and performing a find_nodes search on it. 
     case RefreshNodes ⇒
       nodes.toVector.foreach { nodeAddress ⇒
         val future = (dhtCtx.messageDispatcher ? SendQuery(nodeAddress.address, DHTQueries.ping(dhtCtx.selfNodeId))).mapTo[SendQuery.Status]
@@ -130,7 +131,7 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
   }
 
   def canSplit(nodes: Set[DHTNodeAddress]): Boolean = {
-    (end - start) > maxNodesInBucket && nodes.size >= maxNodesInBucket
+    (end - start) > maxNodesInBucket && nodes.size > maxNodesInBucket
   }
 
   override def preStart(): Unit = {

@@ -66,7 +66,8 @@ class DHTRoutingTable extends Actor with ActorLogging {
   val bootstrapQueue = context.actorOf(DHTBootstrapQueue.props(dhtContext, rootBucket), "dhtBootstrapQueue")
 
   override def receive: Receive = {
-    case AddNode(address) ⇒ 
+    case AddNode(address) ⇒
+      log.debug("Adding DHT node: {}", address)
       bootstrapQueue ! PingNode(address)
 
     case FindPeers(infoHash, selfPort) ⇒

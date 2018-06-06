@@ -46,6 +46,7 @@ class DHTBootstrapQueue(dhtCtx: DHTContext, bucket: ActorRef) extends Actor with
       sendQuery(nodeAddress, DHTQueries.ping(dhtCtx.selfNodeId))
         .map((nodeAddress, _))
     }
+    .log("dht-ping-result")
     .collect {
       case (nodeAddress, SendQuery.Success(PingResponse.Encoded(PingResponse(nodeId)))) ⇒
         DHTNodeAddress(nodeId, nodeAddress)

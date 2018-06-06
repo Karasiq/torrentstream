@@ -29,6 +29,7 @@ case class PeerExtensions(dht: Boolean = true, fast: Boolean = true, extensionPr
 
   override def toString: String = {
     val features = Seq(
+      (dht, "DHT"),
       (fast, "Fast"),
       (extensionProtocol, "Extension protocol")
     )

@@ -9,7 +9,7 @@ import scala.language.postfixOps
 import scala.util.Random
 
 import akka.actor._
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings, FlowShape}
+import akka.stream.{ActorMaterializer, FlowShape}
 import akka.stream.actor.ActorPublisher
 import akka.stream.scaladsl.{Tcp, _}
 import akka.util.ByteString
@@ -54,7 +54,7 @@ class PeerDispatcher(dhtRoutingTable: ActorRef,
                      httpAnnouncer: ActorRef,
                      torrent: Torrent) extends Actor with ActorLogging with Stash {
 
-  private[this] final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
+  private[this] implicit val materializer = ActorMaterializer()
   import context.{dispatcher, system}
 
   private[this] object settings {

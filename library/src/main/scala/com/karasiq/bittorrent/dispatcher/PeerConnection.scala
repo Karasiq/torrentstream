@@ -9,7 +9,7 @@ import scala.concurrent.duration._
 import scala.language.postfixOps
 
 import akka.actor.{ActorRef, FSM, Props}
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Materializer}
+import akka.stream.ActorMaterializer
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import akka.stream.scaladsl._
@@ -19,7 +19,7 @@ import com.karasiq.bittorrent.dispatcher.MessageConversions._
 import com.karasiq.bittorrent.dispatcher.PeerConnection._
 import com.karasiq.bittorrent.dispatcher.PeerConnection.PeerConnectionContext.{HandshakeContext, PeerContext, QueuedDownload, QueuedUpload}
 import com.karasiq.bittorrent.dispatcher.PeerConnection.PeerConnectionState.{Downloading, Idle}
-import com.karasiq.bittorrent.dispatcher.PeerDispatcher.{ConnectDHTPeer, ConnectPeer, UpdateBitField}
+import com.karasiq.bittorrent.dispatcher.PeerDispatcher._
 import com.karasiq.bittorrent.format.Torrent
 import com.karasiq.bittorrent.protocol.{PeerConnectionStage, PeerMessageId, TcpMessageWriter}
 import com.karasiq.bittorrent.protocol.PeerMessages._
@@ -77,7 +77,7 @@ class PeerConnection(peerDispatcher: ActorRef, torrent: Torrent,
                      extMessages: Map[Int, String])
   extends FSM[PeerConnectionState, PeerConnectionContext] with ActorPublisher[ByteString] with PeerMessageMatcher {
 
-  private[this] implicit val materializer: Materializer = ActorMaterializer(ActorMaterializerSettings(context.system))
+  private[this] implicit val materializer = ActorMaterializer()
 
   // -----------------------------------------------------------------------
   // Config
