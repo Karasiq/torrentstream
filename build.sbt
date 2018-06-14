@@ -1,7 +1,6 @@
 lazy val commonSettings = Seq(
   organization := "com.github.karasiq",
-  isSnapshot := false,
-  version := "1.0.7",
+  isSnapshot := version.value.endsWith("SNAPSHOT"),
   scalaVersion := "2.11.8"
 )
 
@@ -33,7 +32,7 @@ lazy val publishSettings = Seq(
 
 lazy val librarySettings = Seq(
   name := "bittorrent",
-  crossScalaVersions := Seq("2.11.11", "2.12.3"),
+  crossScalaVersions := Seq(scalaVersion.value, "2.12.3"),
   libraryDependencies ++= {
     val akkaV = "2.5.4"
     val akkaHttpV = "10.0.10"
@@ -51,6 +50,32 @@ lazy val librarySettings = Seq(
   }
 )
 
+lazy val releaseSettings = Seq(
+  releaseCrossBuild := true,
+  releasePublishArtifactsAction := PgpKeys.publishSigned.value,
+  releaseProcess := {
+    import ReleaseTransformations._
+
+    Seq[ReleaseStep](
+      checkSnapshotDependencies,
+      inquireVersions,
+      runClean,
+      runTest,
+      setReleaseVersion,
+      publishArtifacts,
+      releaseStepCommand("sonatypeRelease"),
+      releaseStepCommand("server/universal:packageBin"),
+      // releaseStepCommand("server/windows:packageBin"),
+      releaseStepCommand("server/githubRelease"),
+      commitReleaseVersion,
+      tagRelease,
+      setNextVersion,
+      commitNextVersion,
+      pushChanges
+    )
+  }
+)
+
 lazy val backendSettings = Seq(
   name := "torrentstream",
   libraryDependencies ++= Seq(
@@ -58,7 +83,11 @@ lazy val backendSettings = Seq(
     "io.getquill" %% "quill-jdbc" % "1.2.1"
   ),
   mainClass in Compile := Some("com.karasiq.torrentstream.app.Main"),
-  scalaJsBundlerCompile in Compile <<= (scalaJsBundlerCompile in Compile).dependsOn(fullOptJS in Compile in frontend),
+  scalaJsBundlerCompile in Compile := {
+    (scalaJsBundlerCompile in Compile)
+      .dependsOn(fullOptJS in Compile in frontend)
+      .value
+  },
   scalaJsBundlerAssets in Compile += {
     import com.karasiq.scalajsbundler.ScalaJSBundler.PageContent
     import com.karasiq.scalajsbundler.dsl._
@@ -90,25 +119,40 @@ lazy val backendSettings = Seq(
     val fonts = fontPackage("glyphicons-halflings-regular", "https://raw.githubusercontent.com/twbs/bootstrap/v3.3.6/dist/fonts/glyphicons-halflings-regular") ++
       fontPackage("fontawesome-webfont", "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/v4.5.0/fonts/fontawesome-webfont")
 
-    Bundle("index", jsDeps, appStatic, fonts, scalaJsApplication(frontend).value)
+    Bundle("index", jsDeps, appStatic, fonts, scalaJsApplication(frontend, launcher = false).value)
   }
 )
 
+lazy val packageUploadSettings = Seq(
+  ghreleaseRepoOrg := "Karasiq",
+  ghreleaseRepoName := name.value,
+  ghreleaseAssets := Seq(
+    target.value / "universal" / s"${name.value}-${version.value}.zip"
+    // target.value / "windows" / s"$baseName.msi"
+  )
+  // ghreleaseTitle := { tagName ⇒ tagName.toString },
+  // ghreleaseNotes := { _ ⇒ "" }
+)
+
 lazy val frontendSettings = Seq(
-  persistLauncher in Compile := true,
+  scalaJSUseMainModuleInitializer in Compile := true,
   name := "torrentstream-frontend",
   libraryDependencies ++= Seq(
     "com.github.karasiq" %%% "scalajs-bootstrap" % "1.0.2"
   )
 )
 
+lazy val root = Project("torrentstream", file("."))
+  .settings(commonSettings, releaseSettings)
+  .aggregate(backend)
+
 lazy val library = Project("bittorrent", file("library"))
   .settings(commonSettings, librarySettings, publishSettings)
 
-lazy val backend = Project("torrentstream", file("."))
+lazy val backend = Project("torrentstream-server", file("server"))
   .dependsOn(library, sharedJVM)
-  .settings(commonSettings, backendSettings)
-  .enablePlugins(ScalaJSBundlerPlugin, JavaAppPackaging)
+  .settings(commonSettings, backendSettings, packageUploadSettings)
+  .enablePlugins(SJSAssetBundlerPlugin, JavaAppPackaging)
 
 lazy val frontend = Project("torrentstream-frontend", file("frontend"))
   .settings(commonSettings, frontendSettings)
