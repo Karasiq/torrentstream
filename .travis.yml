@@ -4,7 +4,7 @@ scala:
 jdk:
   - oraclejdk8
 script:
-  - sbt ++$TRAVIS_SCALA_VERSION compile bittorrent/coverageReport bittorrent/test
+  - sbt ++$TRAVIS_SCALA_VERSION compile coverage bittorrent/test bittorrent/coverageReport
 after_success:
   - bash <(curl -s https://codecov.io/bash)
 sudo: false
