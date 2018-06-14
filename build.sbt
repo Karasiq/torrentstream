@@ -32,6 +32,12 @@ lazy val publishSettings = Seq(
     </developers>
 )
 
+lazy val noPublishSettings = Seq(
+  publishArtifact := false,
+  publishArtifact in makePom := false,
+  publishTo := Some(Resolver.file("Repo", file("target/repo")))
+)
+
 lazy val librarySettings = Seq(
   name := "bittorrent",
   crossScalaVersions := Seq(scalaVersion.value, "2.12.3"),
@@ -64,11 +70,12 @@ lazy val releaseSettings = Seq(
       runClean,
       runTest,
       setReleaseVersion,
-      publishArtifacts,
+      // publishArtifacts,
+      releaseStepCommand("bittorrent/publishSigned"),
       releaseStepCommand("sonatypeRelease"),
-      releaseStepCommand("server/universal:packageBin"),
-      // releaseStepCommand("server/windows:packageBin"),
-      releaseStepCommand("server/githubRelease"),
+      releaseStepCommand("torrentstream-server/universal:packageBin"),
+      // releaseStepCommand("torrentstream-server/windows:packageBin"),
+      releaseStepCommand("torrentstream-server/githubRelease"),
       commitReleaseVersion,
       tagRelease,
       setNextVersion,
