@@ -251,12 +251,12 @@ object DHTMessages {
   object GetPeersResponse extends DHTMessageFormat[GetPeersResponse] {
     def toDict(message: GetPeersResponse): BEncodedDictionary = {
       val baseValues = Seq("id" → message.nodeId.encoded, "token" → BEncodedString(message.token))
-      val values = if (message.peers.nonEmpty) baseValues ++ Seq(
+      val peersValue = if (message.peers.nonEmpty) Seq(
         "values" → BEncodedArray(message.peers.map(pa ⇒ BEncodedString(pa.toBytes)))
-      ) else baseValues ++ Seq(
+      ) else Seq(
         "nodes" → BEncodedString(DHTNodeAddress.encodeList(message.nodes))
       )
-      BEncodedDictionary(values)
+      BEncodedDictionary(baseValues ++ peersValue)
     }
 
     def fromDict(dictionary: BEncodedDictionary): GetPeersResponse = {
