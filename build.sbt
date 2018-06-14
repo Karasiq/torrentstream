@@ -1,3 +1,5 @@
+import scala.io.StdIn
+
 lazy val commonSettings = Seq(
   organization := "com.github.karasiq",
   isSnapshot := version.value.endsWith("SNAPSHOT"),
@@ -129,9 +131,11 @@ lazy val packageUploadSettings = Seq(
   ghreleaseAssets := Seq(
     target.value / "universal" / s"${name.value}-${version.value}.zip"
     // target.value / "windows" / s"$baseName.msi"
-  )
-  // ghreleaseTitle := { tagName ⇒ tagName.toString },
-  // ghreleaseNotes := { _ ⇒ "" }
+  ),
+  ghreleaseNotes := { tagName ⇒
+    StdIn.readLine(s"Input release notes for $tagName: \n")
+  }
+  // ghreleaseTitle := { tagName ⇒ tagName.toString }
 )
 
 lazy val frontendSettings = Seq(
