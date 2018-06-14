@@ -15,3 +15,5 @@ addSbtPlugin("com.github.gseitz" % "sbt-release" % "1.0.7")
 addSbtPlugin("ohnosequences" % "sbt-github-release" % "0.7.0")
 
 libraryDependencies += "com.lihaoyi" %% "scalatags" % "0.6.2"
+
+resolvers += "repo.jenkins-ci.org" at "http://repo.jenkins-ci.org/public" // org.jenkins-ci#annotation-indexer;1.4: not found
