@@ -1,4 +1,4 @@
-import scala.io.StdIn
+
 
 lazy val commonSettings = Seq(
   organization := "com.github.karasiq",
@@ -75,9 +75,10 @@ lazy val releaseSettings = Seq(
       releaseStepCommand("sonatypeRelease"),
       releaseStepCommand("torrentstream-server/universal:packageBin"),
       // releaseStepCommand("torrentstream-server/windows:packageBin"),
-      releaseStepCommand("torrentstream-server/githubRelease"),
       commitReleaseVersion,
       tagRelease,
+      pushChanges,
+      releaseStepCommand("torrentstream-server/githubRelease"),
       setNextVersion,
       commitNextVersion,
       pushChanges
@@ -140,7 +141,7 @@ lazy val packageUploadSettings = Seq(
     // target.value / "windows" / s"$baseName.msi"
   ),
   ghreleaseNotes := { tagName ⇒
-    StdIn.readLine(s"Input release notes for $tagName: \n")
+    SimpleReader.readLine(s"Input release notes for $tagName: ").getOrElse("")
   }
   // ghreleaseTitle := { tagName ⇒ tagName.toString }
 )
