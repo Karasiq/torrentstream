@@ -2,19 +2,20 @@ package com.karasiq.bittorrent.dht
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Random, Success}
 
-import akka.actor.{Actor, ActorLogging, ActorRef, NotInfluenceReceiveTimeout, PossiblyHarmful, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, DeadLetterSuppression, NotInfluenceReceiveTimeout, PossiblyHarmful, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 
 import com.karasiq.bittorrent.dht.DHTMessageDispatcher.SendQuery
-import com.karasiq.bittorrent.dht.DHTMessages.{DHTNodeAddress, DHTQueries}
+import com.karasiq.bittorrent.dht.DHTMessages.{DHTNodeAddress, DHTQueries, FindNodeResponse}
 
 object DHTBucket {
   // Messages
   sealed trait Message
-  final case class AddNodes(nodes: Set[DHTNodeAddress]) extends Message
+  final case class AssociateNodes(nodes: Set[DHTNodeAddress]) extends Message
+  final case object BucketIsEmpty extends Message with NotInfluenceReceiveTimeout with DeadLetterSuppression
 
   final case class FindNodes(id: NodeId) extends Message
   object FindNodes {
@@ -29,7 +30,7 @@ object DHTBucket {
 
   // Internal messages
   private sealed trait InternalMessage extends Message with PossiblyHarmful
-  private case object RefreshNodes extends InternalMessage with NotInfluenceReceiveTimeout
+  private case object RefreshNodes extends InternalMessage with NotInfluenceReceiveTimeout with DeadLetterSuppression
   private final case class RemoveNode(node: DHTNodeAddress) extends InternalMessage
   private final case class DeSplit(nodes: Set[DHTNodeAddress]) extends InternalMessage
 
@@ -51,9 +52,9 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
 
   override def receive: Receive = receiveDefault(Set.empty)
 
-  def receiveDefault(nodes: Set[DHTNodeAddress]): Receive = {
-    case AddNodes(nodes1) ⇒
-      val newNodes = nodes ++ nodes1.filter { n ⇒
+  def receiveDefault(nodes: Set[DHTNodeAddress], lastChanged: Long = System.nanoTime()): Receive = {
+    case AssociateNodes(addNodes) ⇒
+      val newNodes = nodes ++ addNodes.filter { n ⇒
         val idInt = n.nodeId.toBigInt
         idInt >= start && idInt <= end
       }
@@ -62,7 +63,9 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
       else context.become(receiveDefault(newNodes))
 
     case RemoveNode(address) ⇒
-      context.become(receiveDefault(nodes - address))
+      val newNodes = nodes - address
+      if (newNodes.isEmpty) context.parent ! BucketIsEmpty
+      context.become(receiveDefault(newNodes))
 
     case FindNodes(target) ⇒
       val result = nodes.toVector.sortBy(_.nodeId.distanceTo(target))
@@ -71,26 +74,16 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
     case GetAllNodes ⇒
       sender() ! GetAllNodes.Success(nodes)
 
-    // TODO: Buckets that have not been changed in 15 minutes should be "refreshed." This is done by picking a random ID in the range of the bucket and performing a find_nodes search on it. 
     case RefreshNodes ⇒
-      nodes.toVector.foreach { nodeAddress ⇒
-        val future = (dhtCtx.messageDispatcher ? SendQuery(nodeAddress.address, DHTQueries.ping(dhtCtx.selfNodeId))).mapTo[SendQuery.Status]
-
-        future.onComplete {
-          case Failure(_) | Success(SendQuery.Failure(_)) ⇒
-            self ! RemoveNode(nodeAddress)
-
-          case _ ⇒
-            // Ignore 
-        }
-      }
+      val changedAgo = (System.nanoTime() - lastChanged).nanos
+      if (changedAgo > 15.minutes) refreshBucket(nodes)
   }
 
   def receiveSplit(half: BigInt, first: ActorRef, second: ActorRef): Receive = {
-    case AddNodes(nodes) ⇒
+    case AssociateNodes(nodes) ⇒
       val (firstNodes, secondNodes) = nodes.partition(_.nodeId.toBigInt < half)
-      first.forward(AddNodes(firstNodes))
-      second.forward(AddNodes(secondNodes))
+      first.forward(AssociateNodes(firstNodes))
+      second.forward(AssociateNodes(secondNodes))
 
     case rn @ RemoveNode(address) ⇒
       if (address.nodeId.toBigInt < half) first.forward(rn)
@@ -108,11 +101,14 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
 
       future.pipeTo(sender())
 
-    case RefreshNodes ⇒
+    case BucketIsEmpty ⇒
       (self ? GetAllNodes).mapTo[GetAllNodes.Success].foreach {
         case GetAllNodes.Success(nodes) ⇒
           if (nodes.size <= maxNodesInBucket) self ! DeSplit(nodes)
       }
+
+    case RefreshNodes ⇒
+      // Ignore
 
     case DeSplit(nodes) ⇒
       context.stop(first)
@@ -125,8 +121,8 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
     val (firstNodes, secondNodes) = nodes.partition(_.nodeId.toBigInt < half)
     val firstBucket = context.actorOf(DHTBucket.props(dhtCtx, start, half))
     val secondBucket = context.actorOf(DHTBucket.props(dhtCtx, half, end))
-    firstBucket ! AddNodes(firstNodes)
-    secondBucket ! AddNodes(secondNodes)
+    firstBucket ! AssociateNodes(firstNodes)
+    secondBucket ! AssociateNodes(secondNodes)
     context.become(receiveSplit(half, firstBucket, secondBucket))
   }
 
@@ -134,8 +130,32 @@ class DHTBucket(dhtCtx: DHTContext, start: BigInt, end: BigInt) extends Actor wi
     (end - start) > maxNodesInBucket && nodes.size > maxNodesInBucket
   }
 
+  def refreshBucket(nodes: Set[DHTNodeAddress]): Unit = {
+    val randomId = start + BigInt((end - start).bitLength, Random)
+    assert(randomId >= start && randomId <= end, "Invalid random id")
+    log.debug("Refreshing bucket: {}", randomId: NodeId)
+
+    nodes.toVector.foreach { nodeAddress ⇒
+      val future = (dhtCtx.messageDispatcher ? SendQuery(nodeAddress.address, DHTQueries.findNode(dhtCtx.selfNodeId, randomId))).mapTo[SendQuery.Status]
+
+      future.onComplete {
+        case Success(SendQuery.Success(FindNodeResponse.Encoded(FindNodeResponse(_, nodes)))) ⇒
+          log.info("Bucket refreshed: {}", nodes)
+          nodes
+            .map(na ⇒ DHTRoutingTable.AddNode(na.address))
+            .foreach(dhtCtx.routingTable ! _)
+
+        case Failure(_) | Success(SendQuery.Failure(_)) ⇒
+          self ! RemoveNode(nodeAddress)
+
+        case _ ⇒
+          // Ignore
+      }
+    }
+  }
+
   override def preStart(): Unit = {
     super.preStart()
-    context.system.scheduler.schedule(10 minutes, 10 minutes, self, RefreshNodes)
+    context.system.scheduler.schedule(5 minutes, 5 minutes, self, RefreshNodes)
   }
 }

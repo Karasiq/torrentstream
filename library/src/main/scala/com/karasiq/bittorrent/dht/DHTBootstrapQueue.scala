@@ -65,7 +65,7 @@ class DHTBootstrapQueue(dhtCtx: DHTContext, bucket: ActorRef) extends Actor with
 
     case RegisterNode(nodeAddress) ⇒
       log.info("DHT node responded: {}", nodeAddress)
-      bucket ! DHTBucket.AddNodes(Set(nodeAddress))
+      bucket ! DHTBucket.AssociateNodes(Set(nodeAddress))
       sendQuery(nodeAddress.address, DHTQueries.findNode(dhtCtx.selfNodeId, dhtCtx.selfNodeId)).foreach {
         case SendQuery.Success(FindNodeResponse.Encoded(FindNodeResponse(_, nodes))) ⇒
           nodes

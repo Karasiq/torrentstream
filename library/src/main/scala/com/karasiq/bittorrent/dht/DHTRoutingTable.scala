@@ -8,14 +8,14 @@ import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.Random
+import scala.util.{Random, Success}
 
 import akka.actor.{Actor, ActorLogging, PossiblyHarmful, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.{ByteString, Timeout}
 
 import com.karasiq.bittorrent.dht.DHTBootstrapQueue.PingNode
-import com.karasiq.bittorrent.dht.DHTBucket.FindNodes
+import com.karasiq.bittorrent.dht.DHTBucket.{BucketIsEmpty, FindNodes}
 import com.karasiq.bittorrent.dht.DHTMessageDispatcher.{RequestResponse, SendQuery}
 import com.karasiq.bittorrent.dht.DHTMessages._
 import com.karasiq.bittorrent.utils.Utils
@@ -32,6 +32,7 @@ object DHTRoutingTable {
 
   // Internal messages
   private sealed trait InternalMessage extends Message with PossiblyHarmful
+  private case object StartBootstrap extends InternalMessage
   private case object UpdateSecret extends InternalMessage
   private final case class AddPeer(infoHash: ByteString, address: InetSocketAddress) extends InternalMessage
 
@@ -153,14 +154,34 @@ class DHTRoutingTable extends Actor with ActorLogging {
 
     case UpdateSecret ⇒
       TokenSecret.updateSecret()
+
+    case BucketIsEmpty ⇒
+      self ! StartBootstrap
+
+    case StartBootstrap ⇒
+      (rootBucket ? DHTBucket.FindNodes(dhtContext.selfNodeId))
+        .mapTo[DHTBucket.FindNodes.Status]
+        .onComplete {
+          case Success(DHTBucket.FindNodes.Success(nodes)) if nodes.length >= 6 ⇒
+            log.debug("Bootstrap not required")
+
+          case _ ⇒
+            bootstrapDHT()
+        }
+  }
+
+  def bootstrapDHT(): Unit = {
+    log.debug("Bootstrapping DHT")
+    dhtSettings.bootstrapNodes.foreach { node ⇒
+      bootstrapQueue ! DHTBootstrapQueue.PingNode(node)
+    }
   }
 
   override def preStart(): Unit = {
     super.preStart()
     context.system.scheduler.schedule(0 nanos, 5 minutes, self, UpdateSecret)
-    dhtSettings.bootstrapNodes.foreach { node ⇒
-      bootstrapQueue ! DHTBootstrapQueue.PingNode(node)
-    }
+    context.system.scheduler.schedule(0 nanos, 5 minutes, self, StartBootstrap)
+    bootstrapDHT()
   }
 
   object TokenSecret {

@@ -44,7 +44,7 @@ object DHTMessages {
     }
 
     def fromDict(dictionary: BEncodedDictionary): DHTMessageHeader = {
-      val map = dictionary.values.toMap
+      val map = dictionary.toMap
       DHTMessageHeader(map.bytes("t").get, map.string("y").get.head, map.string("v").getOrElse(""))
     }
   }
@@ -58,8 +58,7 @@ object DHTMessages {
     )
 
     def fromDict(dictionary: BEncodedDictionary): DHTQuery = {
-      val map = dictionary.toMap
-      DHTQuery(map("q").asString, map("a").asDict)
+      DHTQuery(dictionary("q").asString, dictionary("a").asDict)
     }
   }
 
@@ -243,8 +242,7 @@ object DHTMessages {
     )
 
     def fromDict(dictionary: BEncodedDictionary): GetPeers = {
-      val map = dictionary.toMap
-      GetPeers(NodeId(map("id").asByteString), map("info_hash").asByteString)
+      GetPeers(NodeId(dictionary("id").asByteString), dictionary("info_hash").asByteString)
     }
   }
 
@@ -300,7 +298,7 @@ object DHTMessages {
     )
 
     def fromDict(dictionary: BEncodedDictionary): AnnouncePeerResponse = {
-      val nodeId = NodeId(dictionary.toMap("id").asByteString)
+      val nodeId = NodeId(dictionary("id").asByteString)
       AnnouncePeerResponse(nodeId)
     }
   }
